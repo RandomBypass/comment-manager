@@ -1,14 +1,18 @@
 import dto.Comment;
+import youtube.YouTubeClient;
 
 import javax.swing.*;
+import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.swing.table.DefaultTableModel;
 import javax.swing.table.TableRowSorter;
 import java.awt.*;
-import java.awt.event.ActionEvent;
-import java.awt.event.ActionListener;
-import java.util.List;
+import java.io.File;
+import java.io.IOException;
 import java.util.*;
+import java.util.List;
+import java.util.concurrent.ExecutionException;
 import java.util.regex.PatternSyntaxException;
+import java.util.stream.Collectors;
 
 public class YouTubeCommentSearchApp extends JFrame {
     private JTextField userSearchField;
@@ -22,68 +26,46 @@ public class YouTubeCommentSearchApp extends JFrame {
     private JButton deleteSelectedButton;
     private JButton deleteFilteredButton;
     private JButton loginButton;
+    private JButton refreshButton;
     private JLabel statusLabel;
     private JLabel userLabel;
 
-    // User permissions
     private String currentUser = null;
-    private final Set<String> adminUsers = Set.of("admin", "moderator", "channel_owner");
-    private final Set<String> channelModerators = new HashSet<>();
-
-    // Sample data - in real app, this would come from YouTube API
-    private List<Comment> allComments;
+    private YouTubeClient youTubeClient = null;
+    private List<Comment> allComments = new ArrayList<>();
 
     public YouTubeCommentSearchApp() {
-        initializeData();
         setupUI();
         setupEventHandlers();
         setVisible(true);
     }
 
-    private void initializeData() {
-        // Sample comments data - replace with actual YouTube API calls
-        allComments = new ArrayList<>(Arrays.asList(
-                new Comment("john_doe", "TechChannel", "How to Code in Java", "Great tutorial! Very helpful.", "2024-01-15"),
-                new Comment("jane_smith", "TechChannel", "Python vs Java", "I prefer Python for beginners", "2024-01-10"),
-                new Comment("john_doe", "MusicChannel", "Best Songs 2024", "Love this playlist!", "2024-01-12"),
-                new Comment("alex_dev", "TechChannel", "How to Code in Java", "Thanks for the clear explanation", "2024-01-14"),
-                new Comment("john_doe", "GameChannel", "Top 10 Games", "Minecraft should be #1", "2024-01-08"),
-                new Comment("sarah_codes", "TechChannel", "Web Development Basics", "HTML is easier than I thought", "2024-01-11"),
-                new Comment("john_doe", "TechChannel", "Web Development Basics", "CSS is tricky though", "2024-01-11"),
-                new Comment("mike_gamer", "GameChannel", "Top 10 Games", "What about Fortnite?", "2024-01-09"),
-                new Comment("jane_smith", "MusicChannel", "Best Songs 2024", "Missing some classics here", "2024-01-13"),
-                new Comment("john_doe", "NewsChannel", "Tech News Weekly", "AI is changing everything", "2024-01-16")
-        ));
-
-        // Setup channel moderators (users who can delete comments on specific channels)
-        channelModerators.add("TechChannel:admin");
-        channelModerators.add("TechChannel:sarah_codes");
-        channelModerators.add("GameChannel:mike_gamer");
-    }
-
     private void setupUI() {
-        setTitle("YouTube Comment Search Tool");
+        setTitle("YouTube Comment Manager");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLayout(new BorderLayout());
         setSize(1000, 700);
         setLocationRelativeTo(null);
 
-        // User login panel
+        // Login panel
         JPanel loginPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         loginPanel.setBorder(BorderFactory.createTitledBorder("User Authentication"));
 
         userLabel = new JLabel("Not logged in");
-        loginButton = new JButton("Login");
-        loginPanel.add(new JLabel("Current User: "));
+        loginButton = new JButton("Login with Google");
+        refreshButton = new JButton("Refresh Comments");
+        refreshButton.setEnabled(false);
+
+        loginPanel.add(new JLabel("Account: "));
         loginPanel.add(userLabel);
         loginPanel.add(loginButton);
+        loginPanel.add(refreshButton);
 
-        // Top panel for search and filters
+        // Search and filter panel
         JPanel topPanel = new JPanel(new GridBagLayout());
         GridBagConstraints gbc = new GridBagConstraints();
         topPanel.setBorder(BorderFactory.createTitledBorder("Search & Filters"));
 
-        // User search
         gbc.gridx = 0;
         gbc.gridy = 0;
         gbc.anchor = GridBagConstraints.WEST;
@@ -100,7 +82,6 @@ public class YouTubeCommentSearchApp extends JFrame {
         searchButton = new JButton("Search");
         topPanel.add(searchButton, gbc);
 
-        // Channel filter
         gbc.gridx = 0;
         gbc.gridy = 1;
         gbc.anchor = GridBagConstraints.WEST;
@@ -111,7 +92,6 @@ public class YouTubeCommentSearchApp extends JFrame {
         channelFilterField = new JTextField(15);
         topPanel.add(channelFilterField, gbc);
 
-        // Video filter
         gbc.gridx = 0;
         gbc.gridy = 2;
         topPanel.add(new JLabel("Filter by Video:"), gbc);
@@ -128,18 +108,18 @@ public class YouTubeCommentSearchApp extends JFrame {
         clearFiltersButton = new JButton("Clear Filters");
         topPanel.add(clearFiltersButton, gbc);
 
-        // Combine login and search panels
         JPanel northPanel = new JPanel(new BorderLayout());
         northPanel.add(loginPanel, BorderLayout.NORTH);
         northPanel.add(topPanel, BorderLayout.CENTER);
         add(northPanel, BorderLayout.NORTH);
 
-        // Table for displaying comments
-        String[] columns = {"Select", "User", "Channel", "Video/Post", "Comment", "Date"};
+        // Table — column 6 ("ID") is kept in the model but hidden from the view
+        // so comment IDs are available for API delete calls without cluttering the UI.
+        String[] columns = {"Select", "User", "Channel", "Video/Post", "Comment", "Date", "ID"};
         tableModel = new DefaultTableModel(columns, 0) {
             @Override
             public boolean isCellEditable(int row, int column) {
-                return column == 0; // Only checkbox column is editable
+                return column == 0;
             }
 
             @Override
@@ -150,8 +130,9 @@ public class YouTubeCommentSearchApp extends JFrame {
 
         commentsTable = new JTable(tableModel);
         commentsTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
-        commentsTable.getColumnModel().getColumn(0).setPreferredWidth(50);  // Checkbox column
-        commentsTable.getColumnModel().getColumn(4).setPreferredWidth(300); // Comment column wider
+        commentsTable.getColumnModel().getColumn(0).setPreferredWidth(50);
+        commentsTable.getColumnModel().getColumn(4).setPreferredWidth(300);
+        commentsTable.removeColumn(commentsTable.getColumnModel().getColumn(6)); // hide ID column
 
         rowSorter = new TableRowSorter<>(tableModel);
         commentsTable.setRowSorter(rowSorter);
@@ -159,7 +140,7 @@ public class YouTubeCommentSearchApp extends JFrame {
         JScrollPane scrollPane = new JScrollPane(commentsTable);
         add(scrollPane, BorderLayout.CENTER);
 
-        // Bottom panel for delete operations
+        // Delete panel
         JPanel bottomPanel = new JPanel(new FlowLayout());
         bottomPanel.setBorder(BorderFactory.createTitledBorder("Delete Operations"));
 
@@ -176,32 +157,124 @@ public class YouTubeCommentSearchApp extends JFrame {
         bottomPanel.add(deleteSelectedButton);
         bottomPanel.add(deleteFilteredButton);
 
-        // Status bar
-        statusLabel = new JLabel("Ready. Please login to enable comment deletion.");
+        statusLabel = new JLabel("Login with your Google account to view and manage YouTube comments.");
         statusLabel.setBorder(BorderFactory.createEmptyBorder(5, 10, 5, 10));
 
         JPanel southPanel = new JPanel(new BorderLayout());
         southPanel.add(bottomPanel, BorderLayout.NORTH);
         southPanel.add(statusLabel, BorderLayout.SOUTH);
         add(southPanel, BorderLayout.SOUTH);
-
-        // Load all comments initially
-        loadAllComments();
     }
 
     private void setupEventHandlers() {
         loginButton.addActionListener(e -> handleLogin());
+        refreshButton.addActionListener(e -> loadCommentsFromYouTube());
         searchButton.addActionListener(e -> searchComments());
         clearFiltersButton.addActionListener(e -> clearFilters());
         deleteSelectedButton.addActionListener(e -> deleteSelectedComments());
         deleteFilteredButton.addActionListener(e -> deleteFilteredComments());
-
-        // Real-time filtering as user types
         channelFilterField.addActionListener(e -> applyFilters());
         videoFilterField.addActionListener(e -> applyFilters());
-
-        // Enter key triggers search
         userSearchField.addActionListener(e -> searchComments());
+    }
+
+    private void handleLogin() {
+        if (currentUser == null) {
+            JFileChooser fileChooser = new JFileChooser();
+            fileChooser.setDialogTitle("Select client_secrets.json (download from Google Cloud Console → APIs & Services → Credentials)");
+            fileChooser.setFileFilter(new FileNameExtensionFilter("JSON files", "json"));
+            if (fileChooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+                loginWithYouTube(fileChooser.getSelectedFile());
+            }
+        } else {
+            youTubeClient = null;
+            currentUser = null;
+            allComments.clear();
+            tableModel.setRowCount(0);
+            userLabel.setText("Not logged in");
+            loginButton.setText("Login with Google");
+            refreshButton.setEnabled(false);
+            deleteSelectedButton.setEnabled(false);
+            deleteFilteredButton.setEnabled(false);
+            statusLabel.setText("Logged out.");
+        }
+    }
+
+    private void loginWithYouTube(File secretsFile) {
+        statusLabel.setText("Opening browser for Google authorization...");
+        loginButton.setEnabled(false);
+
+        new SwingWorker<YouTubeClient, Void>() {
+            @Override
+            protected YouTubeClient doInBackground() throws Exception {
+                return YouTubeClient.authenticate(secretsFile);
+            }
+
+            @Override
+            protected void done() {
+                loginButton.setEnabled(true);
+                try {
+                    youTubeClient = get();
+                    currentUser = youTubeClient.getChannelTitle();
+                    userLabel.setText(currentUser + " (Channel Owner)");
+                    loginButton.setText("Logout");
+                    refreshButton.setEnabled(true);
+                    deleteSelectedButton.setEnabled(true);
+                    deleteFilteredButton.setEnabled(true);
+                    loadCommentsFromYouTube();
+                } catch (ExecutionException e) {
+                    JOptionPane.showMessageDialog(YouTubeCommentSearchApp.this,
+                            "Authentication failed: " + e.getCause().getMessage(),
+                            "Login Error", JOptionPane.ERROR_MESSAGE);
+                    statusLabel.setText("Authentication failed. Please try again.");
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    statusLabel.setText("Authentication was interrupted.");
+                }
+            }
+        }.execute();
+    }
+
+    private void loadCommentsFromYouTube() {
+        if (youTubeClient == null) return;
+
+        setControlsEnabled(false);
+        statusLabel.setText("Loading comments from YouTube...");
+        tableModel.setRowCount(0);
+
+        new SwingWorker<List<Comment>, Void>() {
+            @Override
+            protected List<Comment> doInBackground() throws Exception {
+                return youTubeClient.fetchChannelComments();
+            }
+
+            @Override
+            protected void done() {
+                setControlsEnabled(true);
+                try {
+                    allComments = new ArrayList<>(get());
+                    loadAllComments();
+                    statusLabel.setText("Loaded " + allComments.size() + " comments from YouTube.");
+                } catch (ExecutionException e) {
+                    JOptionPane.showMessageDialog(YouTubeCommentSearchApp.this,
+                            "Failed to load comments: " + e.getCause().getMessage(),
+                            "Load Error", JOptionPane.ERROR_MESSAGE);
+                    statusLabel.setText("Failed to load comments.");
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    statusLabel.setText("Loading was interrupted.");
+                }
+            }
+        }.execute();
+    }
+
+    private void setControlsEnabled(boolean enabled) {
+        loginButton.setEnabled(enabled);
+        refreshButton.setEnabled(enabled && currentUser != null);
+        searchButton.setEnabled(enabled);
+        clearFiltersButton.setEnabled(enabled);
+        deleteSelectedButton.setEnabled(enabled && currentUser != null);
+        deleteFilteredButton.setEnabled(enabled && currentUser != null);
     }
 
     private void searchComments() {
@@ -213,10 +286,7 @@ public class YouTubeCommentSearchApp extends JFrame {
             return;
         }
 
-        // Clear table
         tableModel.setRowCount(0);
-
-        // Filter comments by user
         List<Comment> userComments = new ArrayList<>();
         for (Comment comment : allComments) {
             if (comment.user().toLowerCase().contains(searchUser.toLowerCase())) {
@@ -224,51 +294,35 @@ public class YouTubeCommentSearchApp extends JFrame {
             }
         }
 
-        // Add filtered comments to table
         for (Comment comment : userComments) {
-            Object[] row = {
-                    false, // Checkbox
-                    comment.user(),
-                    comment.channel(),
-                    comment.video(),
-                    comment.text(),
-                    comment.date()
-            };
-            tableModel.addRow(row);
+            tableModel.addRow(new Object[]{
+                    false, comment.user(), comment.channel(), comment.video(),
+                    comment.text(), comment.date(), comment.id()
+            });
         }
 
         statusLabel.setText("Found " + userComments.size() + " comments for user: " + searchUser);
-
-        // Apply additional filters
         applyFilters();
     }
 
     private void applyFilters() {
         String channelFilter = channelFilterField.getText().trim();
         String videoFilter = videoFilterField.getText().trim();
-
         List<RowFilter<Object, Object>> filters = new ArrayList<>();
 
         try {
             if (!channelFilter.isEmpty()) {
-                filters.add(RowFilter.regexFilter("(?i)" + channelFilter, 2)); // Channel column (index 2)
+                filters.add(RowFilter.regexFilter("(?i)" + channelFilter, 2));
             }
-
             if (!videoFilter.isEmpty()) {
-                filters.add(RowFilter.regexFilter("(?i)" + videoFilter, 3)); // Video column (index 3)
+                filters.add(RowFilter.regexFilter("(?i)" + videoFilter, 3));
             }
-
-            if (filters.isEmpty()) {
-                rowSorter.setRowFilter(null);
-            } else {
-                rowSorter.setRowFilter(RowFilter.andFilter(filters));
-            }
+            rowSorter.setRowFilter(filters.isEmpty() ? null : RowFilter.andFilter(filters));
 
             int visibleRows = commentsTable.getRowCount();
             if (!channelFilter.isEmpty() || !videoFilter.isEmpty()) {
                 statusLabel.setText("Showing " + visibleRows + " comments after filtering");
             }
-
         } catch (PatternSyntaxException e) {
             statusLabel.setText("Invalid filter pattern");
         }
@@ -281,208 +335,127 @@ public class YouTubeCommentSearchApp extends JFrame {
         statusLabel.setText("Filters cleared");
     }
 
-    private void handleLogin() {
-        if (currentUser == null) {
-            // Show login dialog
-            String[] users = {"admin", "moderator", "sarah_codes", "mike_gamer", "john_doe", "jane_smith"};
-            String selectedUser = (String) JOptionPane.showInputDialog(
-                    this,
-                    "Select user to login as:",
-                    "Login",
-                    JOptionPane.QUESTION_MESSAGE,
-                    null,
-                    users,
-                    users[0]
-            );
-
-            if (selectedUser != null) {
-                currentUser = selectedUser;
-                userLabel.setText(currentUser + " (" + getUserRole(currentUser) + ")");
-                loginButton.setText("Logout");
-                updateDeleteButtonStates();
-                statusLabel.setText("Logged in as " + currentUser + " with " + getUserRole(currentUser) + " permissions");
-            }
-        } else {
-            // Logout
-            currentUser = null;
-            userLabel.setText("Not logged in");
-            loginButton.setText("Login");
-            deleteSelectedButton.setEnabled(false);
-            deleteFilteredButton.setEnabled(false);
-            statusLabel.setText("Logged out. Please login to enable comment deletion.");
-        }
-    }
-
-    private String getUserRole(String user) {
-        if (adminUsers.contains(user)) {
-            return "Global Admin";
-        }
-
-        // Check if user is a channel moderator
-        for (String moderator : channelModerators) {
-            if (moderator.endsWith(":" + user)) {
-                return "Channel Moderator";
-            }
-        }
-
-        return "Regular User";
-    }
-
-    private boolean canDeleteComment(String commentUser, String channel) {
-        if (currentUser == null) return false;
-
-        // Users can always delete their own comments
-        if (currentUser.equals(commentUser)) return true;
-
-        // Global admins can delete any comment
-        if (adminUsers.contains(currentUser)) return true;
-
-        // Channel moderators can delete comments on their channels
-        String moderatorKey = channel + ":" + currentUser;
-        return channelModerators.contains(moderatorKey);
-    }
-
-    private void updateDeleteButtonStates() {
-        boolean hasPermissions = currentUser != null;
-        deleteSelectedButton.setEnabled(hasPermissions);
-        deleteFilteredButton.setEnabled(hasPermissions);
-    }
-
     private void deleteSelectedComments() {
-        if (currentUser == null) {
-            JOptionPane.showMessageDialog(this, "Please login first to delete comments.");
-            return;
-        }
-
         List<Integer> selectedRows = new ArrayList<>();
-        List<String> unauthorizedComments = new ArrayList<>();
-
-        // Find selected comments
         for (int i = 0; i < tableModel.getRowCount(); i++) {
             Boolean selected = (Boolean) tableModel.getValueAt(i, 0);
             if (selected != null && selected) {
-                int modelRow = commentsTable.convertRowIndexToModel(i);
-                String commentUser = (String) tableModel.getValueAt(modelRow, 1);
-                String channel = (String) tableModel.getValueAt(modelRow, 2);
-
-                if (canDeleteComment(commentUser, channel)) {
-                    selectedRows.add(modelRow);
-                } else {
-                    unauthorizedComments.add(commentUser + " on " + channel);
-                }
+                selectedRows.add(commentsTable.convertRowIndexToModel(i));
             }
         }
 
-        if (selectedRows.isEmpty() && unauthorizedComments.isEmpty()) {
+        if (selectedRows.isEmpty()) {
             JOptionPane.showMessageDialog(this, "No comments selected for deletion.");
             return;
         }
 
-        StringBuilder message = new StringBuilder();
-        if (!selectedRows.isEmpty()) {
-            message.append("Delete ").append(selectedRows.size()).append(" selected comment(s)?");
-        }
-        if (!unauthorizedComments.isEmpty()) {
-            if (message.length() > 0) message.append("\n\n");
-            message.append("You don't have permission to delete ").append(unauthorizedComments.size())
-                    .append(" comment(s):\n").append(String.join("\n", unauthorizedComments));
-        }
+        int result = JOptionPane.showConfirmDialog(this,
+                "Delete " + selectedRows.size() + " selected comment(s) via YouTube API?",
+                "Confirm Deletion", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
 
-        if (!selectedRows.isEmpty()) {
-            int result = JOptionPane.showConfirmDialog(this, message.toString(), "Confirm Deletion",
-                    JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
-
-            if (result == JOptionPane.YES_OPTION) {
-                deleteCommentsByTableRows(selectedRows);
-                statusLabel.setText("Deleted " + selectedRows.size() + " comment(s)");
-            }
-        } else {
-            JOptionPane.showMessageDialog(this, message.toString(), "No Permission", JOptionPane.WARNING_MESSAGE);
+        if (result == JOptionPane.YES_OPTION) {
+            deleteCommentsByTableRows(selectedRows);
         }
     }
 
     private void deleteFilteredComments() {
-        if (currentUser == null) {
-            JOptionPane.showMessageDialog(this, "Please login first to delete comments.");
-            return;
-        }
-
-        List<Integer> deletableRows = new ArrayList<>();
         int totalVisible = commentsTable.getRowCount();
-        int unauthorized = 0;
-
-        // Check all visible (filtered) comments
-        for (int i = 0; i < totalVisible; i++) {
-            int modelRow = commentsTable.convertRowIndexToModel(i);
-            String commentUser = (String) tableModel.getValueAt(modelRow, 1);
-            String channel = (String) tableModel.getValueAt(modelRow, 2);
-
-            if (canDeleteComment(commentUser, channel)) {
-                deletableRows.add(modelRow);
-            } else {
-                unauthorized++;
-            }
-        }
-
-        if (deletableRows.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "No comments in current filter can be deleted with your permissions.");
+        if (totalVisible == 0) {
+            JOptionPane.showMessageDialog(this, "No comments visible to delete.");
             return;
         }
 
-        String message = String.format(
-                "Delete %d filtered comment(s)?%s",
-                deletableRows.size(),
-                unauthorized > 0 ? String.format("\n(%d comment(s) will be skipped due to insufficient permissions)", unauthorized) : ""
-        );
+        List<Integer> rows = new ArrayList<>();
+        for (int i = 0; i < totalVisible; i++) {
+            rows.add(commentsTable.convertRowIndexToModel(i));
+        }
 
-        int result = JOptionPane.showConfirmDialog(this, message, "Confirm Batch Deletion",
-                JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+        int result = JOptionPane.showConfirmDialog(this,
+                "Delete all " + totalVisible + " visible comment(s) via YouTube API?",
+                "Confirm Batch Deletion", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
 
         if (result == JOptionPane.YES_OPTION) {
-            deleteCommentsByTableRows(deletableRows);
-            statusLabel.setText("Deleted " + deletableRows.size() + " filtered comment(s)" +
-                    (unauthorized > 0 ? " (" + unauthorized + " skipped)" : ""));
+            deleteCommentsByTableRows(rows);
         }
     }
 
     private void deleteCommentsByTableRows(List<Integer> tableRows) {
-        // Sort in reverse order to avoid index shifting issues
-        tableRows.sort((a, b) -> b.compareTo(a));
+        // Sort descending so removals from high indices don't shift lower ones
+        tableRows.sort(Collections.reverseOrder());
 
-        // Remove from data source
-        for (int tableRow : tableRows) {
-            String user = (String) tableModel.getValueAt(tableRow, 1);
-            String channel = (String) tableModel.getValueAt(tableRow, 2);
-            String video = (String) tableModel.getValueAt(tableRow, 3);
-            String text = (String) tableModel.getValueAt(tableRow, 4);
-            String date = (String) tableModel.getValueAt(tableRow, 5);
-
-            // Find and remove from allComments
-            allComments.removeIf(comment ->
-                    comment.user().equals(user) &&
-                            comment.channel().equals(channel) &&
-                            comment.video().equals(video) &&
-                            comment.text().equals(text) &&
-                            comment.date().equals(date)
-            );
-
-            // Remove from table model
-            tableModel.removeRow(tableRow);
+        // Capture comment data before the background operation starts
+        List<String> ids = new ArrayList<>();
+        List<Integer> modelRows = new ArrayList<>();
+        for (int row : tableRows) {
+            ids.add((String) tableModel.getValueAt(row, 6));
+            modelRows.add(row);
         }
+
+        if (youTubeClient == null) {
+            // Fallback: no API client, remove from in-memory state only
+            for (int i = 0; i < modelRows.size(); i++) {
+                final String id = ids.get(i);
+                allComments.removeIf(c -> c.id().equals(id));
+                tableModel.removeRow(modelRows.get(i));
+            }
+            statusLabel.setText("Deleted " + modelRows.size() + " comment(s).");
+            return;
+        }
+
+        setControlsEnabled(false);
+        statusLabel.setText("Deleting " + tableRows.size() + " comment(s) via YouTube API...");
+
+        new SwingWorker<Set<String>, Void>() {
+            @Override
+            protected Set<String> doInBackground() {
+                Set<String> deleted = new LinkedHashSet<>();
+                for (String commentId : ids) {
+                    if (commentId != null && !commentId.isEmpty()) {
+                        try {
+                            youTubeClient.deleteComment(commentId);
+                            deleted.add(commentId);
+                        } catch (IOException ignored) {
+                        }
+                    }
+                }
+                return deleted;
+            }
+
+            @Override
+            protected void done() {
+                setControlsEnabled(true);
+                try {
+                    Set<String> deletedIds = get();
+
+                    // Remove successfully deleted rows (descending order is already maintained)
+                    for (int i = 0; i < modelRows.size(); i++) {
+                        if (deletedIds.contains(ids.get(i))) {
+                            tableModel.removeRow(modelRows.get(i));
+                        }
+                    }
+                    allComments.removeIf(c -> deletedIds.contains(c.id()));
+
+                    int failed = tableRows.size() - deletedIds.size();
+                    if (failed > 0) {
+                        statusLabel.setText("Deleted " + deletedIds.size() + " comment(s). "
+                                + failed + " could not be deleted (insufficient permissions or API error).");
+                    } else {
+                        statusLabel.setText("Successfully deleted " + deletedIds.size() + " comment(s).");
+                    }
+                } catch (ExecutionException | InterruptedException e) {
+                    statusLabel.setText("Error during deletion: " + e.getMessage());
+                }
+            }
+        }.execute();
     }
 
     private void loadAllComments() {
         tableModel.setRowCount(0);
         for (Comment comment : allComments) {
-            Object[] row = {
-                    false, // Checkbox
-                    comment.user(),
-                    comment.channel(),
-                    comment.video(),
-                    comment.text(),
-                    comment.date()
-            };
-            tableModel.addRow(row);
+            tableModel.addRow(new Object[]{
+                    false, comment.user(), comment.channel(), comment.video(),
+                    comment.text(), comment.date(), comment.id()
+            });
         }
     }
 
