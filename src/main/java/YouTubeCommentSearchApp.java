@@ -1,4 +1,6 @@
+import config.KeyringStore;
 import dto.Comment;
+import youtube.TakeoutImporter;
 import youtube.YouTubeClient;
 
 import javax.swing.*;
@@ -8,11 +10,11 @@ import javax.swing.table.TableRowSorter;
 import java.awt.*;
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.util.*;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.regex.PatternSyntaxException;
-import java.util.stream.Collectors;
 
 public class YouTubeCommentSearchApp extends JFrame {
     private JTextField userSearchField;
@@ -26,18 +28,20 @@ public class YouTubeCommentSearchApp extends JFrame {
     private JButton deleteSelectedButton;
     private JButton deleteFilteredButton;
     private JButton loginButton;
-    private JButton refreshButton;
+    private JButton importButton;
     private JLabel statusLabel;
     private JLabel userLabel;
 
     private String currentUser = null;
     private YouTubeClient youTubeClient = null;
     private List<Comment> allComments = new ArrayList<>();
+    private final KeyringStore keyringStore = new KeyringStore();
 
     public YouTubeCommentSearchApp() {
         setupUI();
         setupEventHandlers();
         setVisible(true);
+        autoLoginFromKeyring();
     }
 
     private void setupUI() {
@@ -53,13 +57,12 @@ public class YouTubeCommentSearchApp extends JFrame {
 
         userLabel = new JLabel("Not logged in");
         loginButton = new JButton("Login with Google");
-        refreshButton = new JButton("Refresh Comments");
-        refreshButton.setEnabled(false);
+        importButton = new JButton("Import from Takeout...");
 
         loginPanel.add(new JLabel("Account: "));
         loginPanel.add(userLabel);
         loginPanel.add(loginButton);
-        loginPanel.add(refreshButton);
+        loginPanel.add(importButton);
 
         // Search and filter panel
         JPanel topPanel = new JPanel(new GridBagLayout());
@@ -157,7 +160,7 @@ public class YouTubeCommentSearchApp extends JFrame {
         bottomPanel.add(deleteSelectedButton);
         bottomPanel.add(deleteFilteredButton);
 
-        statusLabel = new JLabel("Login with your Google account to view and manage YouTube comments.");
+        statusLabel = new JLabel("Import a Google Takeout comments CSV to view comments. Login with Google to enable deletion.");
         statusLabel.setBorder(BorderFactory.createEmptyBorder(5, 10, 5, 10));
 
         JPanel southPanel = new JPanel(new BorderLayout());
@@ -168,7 +171,7 @@ public class YouTubeCommentSearchApp extends JFrame {
 
     private void setupEventHandlers() {
         loginButton.addActionListener(e -> handleLogin());
-        refreshButton.addActionListener(e -> loadCommentsFromYouTube());
+        importButton.addActionListener(e -> importFromTakeout());
         searchButton.addActionListener(e -> searchComments());
         clearFiltersButton.addActionListener(e -> clearFilters());
         deleteSelectedButton.addActionListener(e -> deleteSelectedComments());
@@ -178,13 +181,32 @@ public class YouTubeCommentSearchApp extends JFrame {
         userSearchField.addActionListener(e -> searchComments());
     }
 
+    /**
+     * Attempts silent background login using client secrets stored in the OS keyring.
+     * If a valid refresh token is cached no browser interaction is needed.
+     * Does nothing if no secrets are in the keyring yet.
+     */
+    private void autoLoginFromKeyring() {
+        String json = keyringStore.load();
+        if (json == null) return;
+        statusLabel.setText("Authenticating in background...");
+        loginWithYouTube(json);
+    }
+
     private void handleLogin() {
         if (currentUser == null) {
             JFileChooser fileChooser = new JFileChooser();
-            fileChooser.setDialogTitle("Select client_secrets.json (download from Google Cloud Console → APIs & Services → Credentials)");
+            fileChooser.setDialogTitle("Select client_secrets.json (download from Google Cloud Console \u2192 APIs & Services \u2192 Credentials)");
             fileChooser.setFileFilter(new FileNameExtensionFilter("JSON files", "json"));
-            if (fileChooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
-                loginWithYouTube(fileChooser.getSelectedFile());
+            if (fileChooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) return;
+            try {
+                String json = Files.readString(fileChooser.getSelectedFile().toPath());
+                keyringStore.save(json);
+                loginWithYouTube(json);
+            } catch (Exception e) {
+                JOptionPane.showMessageDialog(this,
+                        "Failed to read or secure credentials: " + e.getMessage(),
+                        "Error", JOptionPane.ERROR_MESSAGE);
             }
         } else {
             youTubeClient = null;
@@ -193,21 +215,20 @@ public class YouTubeCommentSearchApp extends JFrame {
             tableModel.setRowCount(0);
             userLabel.setText("Not logged in");
             loginButton.setText("Login with Google");
-            refreshButton.setEnabled(false);
             deleteSelectedButton.setEnabled(false);
             deleteFilteredButton.setEnabled(false);
-            statusLabel.setText("Logged out.");
+            statusLabel.setText("Logged out. Comments remain loaded; login again to enable deletion.");
         }
     }
 
-    private void loginWithYouTube(File secretsFile) {
+    private void loginWithYouTube(String secretsJson) {
         statusLabel.setText("Opening browser for Google authorization...");
         loginButton.setEnabled(false);
 
         new SwingWorker<YouTubeClient, Void>() {
             @Override
             protected YouTubeClient doInBackground() throws Exception {
-                return YouTubeClient.authenticate(secretsFile);
+                return YouTubeClient.authenticate(secretsJson);
             }
 
             @Override
@@ -216,12 +237,11 @@ public class YouTubeCommentSearchApp extends JFrame {
                 try {
                     youTubeClient = get();
                     currentUser = youTubeClient.getChannelTitle();
-                    userLabel.setText(currentUser + " (Channel Owner)");
+                    userLabel.setText(currentUser);
                     loginButton.setText("Logout");
-                    refreshButton.setEnabled(true);
                     deleteSelectedButton.setEnabled(true);
                     deleteFilteredButton.setEnabled(true);
-                    loadCommentsFromYouTube();
+                    statusLabel.setText("Logged in as " + currentUser + ". Import a Takeout CSV to load comments.");
                 } catch (ExecutionException e) {
                     JOptionPane.showMessageDialog(YouTubeCommentSearchApp.this,
                             "Authentication failed: " + e.getCause().getMessage(),
@@ -235,46 +255,49 @@ public class YouTubeCommentSearchApp extends JFrame {
         }.execute();
     }
 
-    private void loadCommentsFromYouTube() {
-        if (youTubeClient == null) return;
+    private void importFromTakeout() {
+        JFileChooser fileChooser = new JFileChooser();
+        fileChooser.setDialogTitle("Select Google Takeout comments CSV file");
+        fileChooser.setFileFilter(new FileNameExtensionFilter("CSV files", "csv"));
+        if (fileChooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) return;
 
-        setControlsEnabled(false);
-        statusLabel.setText("Loading comments from YouTube...");
-        tableModel.setRowCount(0);
+        File csvFile = fileChooser.getSelectedFile();
+        String authorName = currentUser != null ? currentUser : "me";
+
+        setImportingState(true);
 
         new SwingWorker<List<Comment>, Void>() {
             @Override
             protected List<Comment> doInBackground() throws Exception {
-                return youTubeClient.fetchChannelComments();
+                return TakeoutImporter.importFromCsv(csvFile, authorName);
             }
 
             @Override
             protected void done() {
-                setControlsEnabled(true);
+                setImportingState(false);
                 try {
                     allComments = new ArrayList<>(get());
                     loadAllComments();
-                    statusLabel.setText("Loaded " + allComments.size() + " comments from YouTube.");
+                    statusLabel.setText("Imported " + allComments.size() + " comments from " + csvFile.getName() + ".");
                 } catch (ExecutionException e) {
                     JOptionPane.showMessageDialog(YouTubeCommentSearchApp.this,
-                            "Failed to load comments: " + e.getCause().getMessage(),
-                            "Load Error", JOptionPane.ERROR_MESSAGE);
-                    statusLabel.setText("Failed to load comments.");
+                            "Import failed: " + e.getCause().getMessage(),
+                            "Import Error", JOptionPane.ERROR_MESSAGE);
+                    statusLabel.setText("Import failed.");
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    statusLabel.setText("Loading was interrupted.");
                 }
             }
         }.execute();
     }
 
-    private void setControlsEnabled(boolean enabled) {
-        loginButton.setEnabled(enabled);
-        refreshButton.setEnabled(enabled && currentUser != null);
-        searchButton.setEnabled(enabled);
-        clearFiltersButton.setEnabled(enabled);
-        deleteSelectedButton.setEnabled(enabled && currentUser != null);
-        deleteFilteredButton.setEnabled(enabled && currentUser != null);
+    private void setImportingState(boolean importing) {
+        loginButton.setEnabled(!importing);
+        importButton.setEnabled(!importing);
+        searchButton.setEnabled(!importing);
+        clearFiltersButton.setEnabled(!importing);
+        deleteSelectedButton.setEnabled(!importing && currentUser != null);
+        deleteFilteredButton.setEnabled(!importing && currentUser != null);
     }
 
     private void searchComments() {
@@ -402,7 +425,7 @@ public class YouTubeCommentSearchApp extends JFrame {
             return;
         }
 
-        setControlsEnabled(false);
+        setImportingState(false);
         statusLabel.setText("Deleting " + tableRows.size() + " comment(s) via YouTube API...");
 
         new SwingWorker<Set<String>, Void>() {
@@ -423,7 +446,7 @@ public class YouTubeCommentSearchApp extends JFrame {
 
             @Override
             protected void done() {
-                setControlsEnabled(true);
+                setImportingState(true);
                 try {
                     Set<String> deletedIds = get();
 
