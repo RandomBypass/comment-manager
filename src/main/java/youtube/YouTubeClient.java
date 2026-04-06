@@ -12,9 +12,12 @@ import com.google.api.client.util.store.FileDataStoreFactory;
 import com.google.api.services.youtube.YouTube;
 import com.google.api.services.youtube.model.Channel;
 import com.google.api.services.youtube.model.ChannelListResponse;
+import com.google.api.services.youtube.model.Video;
+import com.google.api.services.youtube.model.VideoListResponse;
 
 import java.io.*;
 import java.security.GeneralSecurityException;
+import java.util.*;
 import java.util.List;
 
 public class YouTubeClient {
@@ -92,6 +95,56 @@ public class YouTubeClient {
 
     public String getChannelTitle() {
         return channelTitle;
+    }
+
+    /** Holds the resolved title and owning channel name for a single video. */
+    public record VideoInfo(String title, String channelTitle) {}
+
+    /**
+     * Fetches video title and channel name (the channel that owns the video, i.e. where
+     * the comment was published) for the given video IDs, in batches of 50 (API limit).
+     * IDs with no result (private/deleted videos) are omitted from the returned map.
+     */
+    public Map<String, VideoInfo> fetchVideoInfo(Collection<String> videoIds) throws IOException {
+        Map<String, VideoInfo> info = new HashMap<>();
+        List<String> ids = new ArrayList<>(videoIds);
+        for (int i = 0; i < ids.size(); i += 50) {
+            List<String> batch = ids.subList(i, Math.min(i + 50, ids.size()));
+            VideoListResponse response = youtube.videos()
+                    .list(List.of("snippet"))
+                    .setId(batch)
+                    .execute();
+            if (response.getItems() != null) {
+                for (Video v : response.getItems()) {
+                    info.put(v.getId(), new VideoInfo(
+                            v.getSnippet().getTitle(),
+                            v.getSnippet().getChannelTitle()
+                    ));
+                }
+            }
+        }
+        return info;
+    }
+
+    /**
+     * Fetches channel names for the given channel IDs in batches of 50 (API limit).
+     */
+    public Map<String, String> fetchChannelNames(Collection<String> channelIds) throws IOException {
+        Map<String, String> names = new HashMap<>();
+        List<String> ids = new ArrayList<>(channelIds);
+        for (int i = 0; i < ids.size(); i += 50) {
+            List<String> batch = ids.subList(i, Math.min(i + 50, ids.size()));
+            ChannelListResponse response = youtube.channels()
+                    .list(List.of("snippet"))
+                    .setId(batch)
+                    .execute();
+            if (response.getItems() != null) {
+                for (Channel c : response.getItems()) {
+                    names.put(c.getId(), c.getSnippet().getTitle());
+                }
+            }
+        }
+        return names;
     }
 
     /**

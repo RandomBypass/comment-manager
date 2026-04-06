@@ -8,8 +8,12 @@ import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.swing.table.DefaultTableModel;
 import javax.swing.table.TableRowSorter;
 import java.awt.*;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.awt.event.MouseMotionAdapter;
 import java.io.File;
 import java.io.IOException;
+import java.net.URI;
 import java.nio.file.Files;
 import java.util.*;
 import java.util.List;
@@ -116,9 +120,9 @@ public class YouTubeCommentSearchApp extends JFrame {
         northPanel.add(topPanel, BorderLayout.CENTER);
         add(northPanel, BorderLayout.NORTH);
 
-        // Table — column 6 ("ID") is kept in the model but hidden from the view
-        // so comment IDs are available for API delete calls without cluttering the UI.
-        String[] columns = {"Select", "User", "Channel", "Video/Post", "Comment", "Date", "ID"};
+        // Model columns: Select(0) User(1) Channel(2) Video/Post(3) Comment(4) Date(5) Link(6) ID(7)
+        // Column 7 (ID) is hidden from the view — used only for API delete calls.
+        String[] columns = {"Select", "User", "Channel", "Video/Post", "Comment", "Date", "Link", "ID"};
         tableModel = new DefaultTableModel(columns, 0) {
             @Override
             public boolean isCellEditable(int row, int column) {
@@ -135,7 +139,54 @@ public class YouTubeCommentSearchApp extends JFrame {
         commentsTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         commentsTable.getColumnModel().getColumn(0).setPreferredWidth(50);
         commentsTable.getColumnModel().getColumn(4).setPreferredWidth(300);
-        commentsTable.removeColumn(commentsTable.getColumnModel().getColumn(6)); // hide ID column
+        commentsTable.getColumnModel().getColumn(6).setPreferredWidth(220);
+        commentsTable.removeColumn(commentsTable.getColumnModel().getColumn(7)); // hide ID column
+
+        // Render the Link column as a clickable blue hyperlink
+        commentsTable.getColumnModel().getColumn(6).setCellRenderer(
+                new javax.swing.table.DefaultTableCellRenderer() {
+                    @Override
+                    public Component getTableCellRendererComponent(
+                            JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int col) {
+                        super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, col);
+                        String url = value != null ? value.toString() : "";
+                        setText(url.isEmpty() ? "" : "<html><u>" + url + "</u></html>");
+                        setForeground(isSelected ? Color.WHITE : new Color(0, 102, 204));
+                        return this;
+                    }
+                });
+
+        // Open the video URL in the browser when the Link column is clicked
+        commentsTable.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                int viewCol = commentsTable.columnAtPoint(e.getPoint());
+                if (commentsTable.convertColumnIndexToModel(viewCol) != 6) return;
+                int viewRow = commentsTable.rowAtPoint(e.getPoint());
+                if (viewRow < 0) return;
+                int modelRow = commentsTable.convertRowIndexToModel(viewRow);
+                String url = (String) tableModel.getValueAt(modelRow, 6);
+                if (url != null && !url.isEmpty()) {
+                    try {
+                        Desktop.getDesktop().browse(new URI(url));
+                    } catch (Exception ex) {
+                        statusLabel.setText("Could not open link: " + ex.getMessage());
+                    }
+                }
+            }
+        });
+
+        // Change cursor to hand when hovering over the Link column
+        commentsTable.addMouseMotionListener(new MouseMotionAdapter() {
+            @Override
+            public void mouseMoved(MouseEvent e) {
+                int viewCol = commentsTable.columnAtPoint(e.getPoint());
+                boolean onLink = commentsTable.convertColumnIndexToModel(viewCol) == 6;
+                commentsTable.setCursor(onLink
+                        ? Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+                        : Cursor.getDefaultCursor());
+            }
+        });
 
         rowSorter = new TableRowSorter<>(tableModel);
         commentsTable.setRowSorter(rowSorter);
@@ -279,6 +330,7 @@ public class YouTubeCommentSearchApp extends JFrame {
                     allComments = new ArrayList<>(get());
                     loadAllComments();
                     statusLabel.setText("Imported " + allComments.size() + " comments from " + csvFile.getName() + ".");
+                    resolveNamesInBackground();
                 } catch (ExecutionException e) {
                     JOptionPane.showMessageDialog(YouTubeCommentSearchApp.this,
                             "Import failed: " + e.getCause().getMessage(),
@@ -286,6 +338,61 @@ public class YouTubeCommentSearchApp extends JFrame {
                     statusLabel.setText("Import failed.");
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
+                }
+            }
+        }.execute();
+    }
+
+    /**
+     * If the user is logged in, fetches real video titles and channel names from the
+     * YouTube API to replace the raw IDs stored by the Takeout importer.
+     * Runs in the background; reloads the table when done.
+     */
+    /**
+     * If the user is logged in, fetches real video titles and the names of the channels
+     * where comments were published (via the video's owning channel, not the CSV's
+     * "channel ID" column which holds the commenter's own channel ID).
+     * Runs in the background; reloads the table when done.
+     */
+    private void resolveNamesInBackground() {
+        if (youTubeClient == null || allComments.isEmpty()) return;
+
+        // c.video() holds the raw video ID from the Takeout CSV
+        Set<String> videoIds = new HashSet<>();
+        for (Comment c : allComments) {
+            if (!c.video().isEmpty()) videoIds.add(c.video());
+        }
+
+        statusLabel.setText("Resolving video titles and channel names...");
+
+        new SwingWorker<Void, Void>() {
+            Map<String, YouTubeClient.VideoInfo> videoInfo;
+
+            @Override
+            protected Void doInBackground() throws Exception {
+                videoInfo = youTubeClient.fetchVideoInfo(videoIds);
+                return null;
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    get();
+                    List<Comment> resolved = new ArrayList<>();
+                    for (Comment c : allComments) {
+                        YouTubeClient.VideoInfo info = videoInfo.get(c.video());
+                        resolved.add(info == null ? c : new Comment(
+                                c.id(), c.user(),
+                                info.channelTitle(), // channel where the video/comment lives
+                                info.title(),        // video title
+                                c.text(), c.date(), c.videoUrl()
+                        ));
+                    }
+                    allComments = resolved;
+                    loadAllComments();
+                    statusLabel.setText("Loaded " + allComments.size() + " comments with titles resolved.");
+                } catch (Exception ignored) {
+                    // Non-fatal: raw IDs remain as fallback values already shown in the table
                 }
             }
         }.execute();
@@ -320,7 +427,7 @@ public class YouTubeCommentSearchApp extends JFrame {
         for (Comment comment : userComments) {
             tableModel.addRow(new Object[]{
                     false, comment.user(), comment.channel(), comment.video(),
-                    comment.text(), comment.date(), comment.id()
+                    comment.text(), comment.date(), comment.videoUrl(), comment.id()
             });
         }
 
@@ -410,7 +517,7 @@ public class YouTubeCommentSearchApp extends JFrame {
         List<String> ids = new ArrayList<>();
         List<Integer> modelRows = new ArrayList<>();
         for (int row : tableRows) {
-            ids.add((String) tableModel.getValueAt(row, 6));
+            ids.add((String) tableModel.getValueAt(row, 7)); // model col 7 = hidden ID
             modelRows.add(row);
         }
 
@@ -477,7 +584,7 @@ public class YouTubeCommentSearchApp extends JFrame {
         for (Comment comment : allComments) {
             tableModel.addRow(new Object[]{
                     false, comment.user(), comment.channel(), comment.video(),
-                    comment.text(), comment.date(), comment.id()
+                    comment.text(), comment.date(), comment.videoUrl(), comment.id()
             });
         }
     }

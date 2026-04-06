@@ -74,7 +74,8 @@ public class TakeoutImporter {
 
             if (text.isEmpty()) continue;
 
-            comments.add(new Comment(id, authorName, channel, videoId, text, date));
+            String videoUrl = videoId.isEmpty() ? "" : "https://www.youtube.com/watch?v=" + videoId;
+            comments.add(new Comment(id, authorName, channel, videoId, text, date, videoUrl));
         }
 
         return comments;
