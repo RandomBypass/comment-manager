@@ -18,16 +18,14 @@ import java.nio.file.Files;
 import java.util.*;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
-import java.util.regex.PatternSyntaxException;
+import java.util.regex.Pattern;
 
 public class YouTubeCommentSearchApp extends JFrame {
-    private JTextField userSearchField;
     private JTextField channelFilterField;
     private JTextField videoFilterField;
     private JTable commentsTable;
     private DefaultTableModel tableModel;
     private TableRowSorter<DefaultTableModel> rowSorter;
-    private JButton searchButton;
     private JButton clearFiltersButton;
     private JButton deleteSelectedButton;
     private JButton deleteFilteredButton;
@@ -68,51 +66,38 @@ public class YouTubeCommentSearchApp extends JFrame {
         loginPanel.add(loginButton);
         loginPanel.add(importButton);
 
-        // Search and filter panel
+        // Filter panel
         JPanel topPanel = new JPanel(new GridBagLayout());
         GridBagConstraints gbc = new GridBagConstraints();
-        topPanel.setBorder(BorderFactory.createTitledBorder("Search & Filters"));
+        topPanel.setBorder(BorderFactory.createTitledBorder("Filters"));
 
         gbc.gridx = 0;
         gbc.gridy = 0;
         gbc.anchor = GridBagConstraints.WEST;
-        topPanel.add(new JLabel("Search User:"), gbc);
+        gbc.insets = new Insets(2, 4, 2, 4);
+        topPanel.add(new JLabel("Channel:"), gbc);
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
-        userSearchField = new JTextField(15);
-        topPanel.add(userSearchField, gbc);
-
-        gbc.gridx = 2;
-        gbc.fill = GridBagConstraints.NONE;
-        gbc.weightx = 0;
-        searchButton = new JButton("Search");
-        topPanel.add(searchButton, gbc);
-
-        gbc.gridx = 0;
-        gbc.gridy = 1;
-        gbc.anchor = GridBagConstraints.WEST;
-        topPanel.add(new JLabel("Filter by Channel:"), gbc);
-        gbc.gridx = 1;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
-        channelFilterField = new JTextField(15);
+        channelFilterField = new JTextField(20);
         topPanel.add(channelFilterField, gbc);
 
         gbc.gridx = 0;
-        gbc.gridy = 2;
-        topPanel.add(new JLabel("Filter by Video:"), gbc);
+        gbc.gridy = 1;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        topPanel.add(new JLabel("Video/Post:"), gbc);
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
-        videoFilterField = new JTextField(15);
+        videoFilterField = new JTextField(20);
         topPanel.add(videoFilterField, gbc);
 
         gbc.gridx = 2;
-        gbc.gridy = 2;
+        gbc.gridy = 1;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
-        clearFiltersButton = new JButton("Clear Filters");
+        clearFiltersButton = new JButton("Clear");
         topPanel.add(clearFiltersButton, gbc);
 
         JPanel northPanel = new JPanel(new BorderLayout());
@@ -223,13 +208,20 @@ public class YouTubeCommentSearchApp extends JFrame {
     private void setupEventHandlers() {
         loginButton.addActionListener(e -> handleLogin());
         importButton.addActionListener(e -> importFromTakeout());
-        searchButton.addActionListener(e -> searchComments());
         clearFiltersButton.addActionListener(e -> clearFilters());
         deleteSelectedButton.addActionListener(e -> deleteSelectedComments());
         deleteFilteredButton.addActionListener(e -> deleteFilteredComments());
-        channelFilterField.addActionListener(e -> applyFilters());
-        videoFilterField.addActionListener(e -> applyFilters());
-        userSearchField.addActionListener(e -> searchComments());
+        addRealTimeFilter(channelFilterField);
+        addRealTimeFilter(videoFilterField);
+    }
+
+    /** Applies filters on every keystroke in the given field. */
+    private void addRealTimeFilter(JTextField field) {
+        field.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            public void insertUpdate(javax.swing.event.DocumentEvent e) { applyFilters(); }
+            public void removeUpdate(javax.swing.event.DocumentEvent e) { applyFilters(); }
+            public void changedUpdate(javax.swing.event.DocumentEvent e) { applyFilters(); }
+        });
     }
 
     /**
@@ -307,6 +299,21 @@ public class YouTubeCommentSearchApp extends JFrame {
     }
 
     private void importFromTakeout() {
+        JOptionPane.showMessageDialog(this,
+                "<html><b>Expected file structure</b><br><br>" +
+                "Export your comments from <b>takeout.google.com</b>:<br>" +
+                "YouTube and YouTube Music \u2192 Comments<br><br>" +
+                "Two CSV formats are supported (detected automatically):<br><br>" +
+                "<b>Standard (8 columns) \u2014 video comments only:</b><br>" +
+                "&nbsp;&nbsp;Comment ID, Channel ID, Date, Price, Parent comment ID,<br>" +
+                "&nbsp;&nbsp;Video ID, Comment text, Top-level comment ID<br><br>" +
+                "<b>Extended (9 columns) \u2014 video and post comments:</b><br>" +
+                "&nbsp;&nbsp;Comment ID, Channel ID, Date, Price, Parent comment ID,<br>" +
+                "&nbsp;&nbsp;<u>Post ID</u>, Video ID, Comment text, Top-level comment ID<br><br>" +
+                "Column headers may be in any language; column order is fixed.</html>",
+                "Import from Google Takeout",
+                JOptionPane.INFORMATION_MESSAGE);
+
         JFileChooser fileChooser = new JFileChooser();
         fileChooser.setDialogTitle("Select Google Takeout comments CSV file");
         fileChooser.setFileFilter(new FileNameExtensionFilter("CSV files", "csv"));
@@ -357,10 +364,10 @@ public class YouTubeCommentSearchApp extends JFrame {
     private void resolveNamesInBackground() {
         if (youTubeClient == null || allComments.isEmpty()) return;
 
-        // c.video() holds the raw video ID from the Takeout CSV
+        // c.video() holds either a video ID or a post ID; only send real video IDs to the API
         Set<String> videoIds = new HashSet<>();
         for (Comment c : allComments) {
-            if (!c.video().isEmpty()) videoIds.add(c.video());
+            if (c.videoUrl().contains("watch?v=")) videoIds.add(c.video());
         }
 
         statusLabel.setText("Resolving video titles and channel names...");
@@ -401,60 +408,32 @@ public class YouTubeCommentSearchApp extends JFrame {
     private void setImportingState(boolean importing) {
         loginButton.setEnabled(!importing);
         importButton.setEnabled(!importing);
-        searchButton.setEnabled(!importing);
         clearFiltersButton.setEnabled(!importing);
         deleteSelectedButton.setEnabled(!importing && currentUser != null);
         deleteFilteredButton.setEnabled(!importing && currentUser != null);
     }
 
-    private void searchComments() {
-        String searchUser = userSearchField.getText().trim();
-
-        if (searchUser.isEmpty()) {
-            loadAllComments();
-            statusLabel.setText("Showing all comments. Enter a username to search.");
-            return;
-        }
-
-        tableModel.setRowCount(0);
-        List<Comment> userComments = new ArrayList<>();
-        for (Comment comment : allComments) {
-            if (comment.user().toLowerCase().contains(searchUser.toLowerCase())) {
-                userComments.add(comment);
-            }
-        }
-
-        for (Comment comment : userComments) {
-            tableModel.addRow(new Object[]{
-                    false, comment.user(), comment.channel(), comment.video(),
-                    comment.text(), comment.date(), comment.videoUrl(), comment.id()
-            });
-        }
-
-        statusLabel.setText("Found " + userComments.size() + " comments for user: " + searchUser);
-        applyFilters();
-    }
-
     private void applyFilters() {
         String channelFilter = channelFilterField.getText().trim();
-        String videoFilter = videoFilterField.getText().trim();
+        String videoFilter   = videoFilterField.getText().trim();
         List<RowFilter<Object, Object>> filters = new ArrayList<>();
 
-        try {
-            if (!channelFilter.isEmpty()) {
-                filters.add(RowFilter.regexFilter("(?i)" + channelFilter, 2));
-            }
-            if (!videoFilter.isEmpty()) {
-                filters.add(RowFilter.regexFilter("(?i)" + videoFilter, 3));
-            }
-            rowSorter.setRowFilter(filters.isEmpty() ? null : RowFilter.andFilter(filters));
+        if (!channelFilter.isEmpty()) {
+            // Pattern.quote treats the input as a literal string (no regex special chars)
+            filters.add(RowFilter.regexFilter("(?i)" + Pattern.quote(channelFilter), 2));
+        }
+        if (!videoFilter.isEmpty()) {
+            filters.add(RowFilter.regexFilter("(?i)" + Pattern.quote(videoFilter), 3));
+        }
 
-            int visibleRows = commentsTable.getRowCount();
-            if (!channelFilter.isEmpty() || !videoFilter.isEmpty()) {
-                statusLabel.setText("Showing " + visibleRows + " comments after filtering");
-            }
-        } catch (PatternSyntaxException e) {
-            statusLabel.setText("Invalid filter pattern");
+        rowSorter.setRowFilter(filters.isEmpty() ? null : RowFilter.andFilter(filters));
+
+        int visible = commentsTable.getRowCount();
+        int total   = tableModel.getRowCount();
+        if (!channelFilter.isEmpty() || !videoFilter.isEmpty()) {
+            statusLabel.setText("Showing " + visible + " of " + total + " comments");
+        } else if (total > 0) {
+            statusLabel.setText("Showing all " + total + " comments");
         }
     }
 
@@ -532,7 +511,7 @@ public class YouTubeCommentSearchApp extends JFrame {
             return;
         }
 
-        setImportingState(false);
+        setImportingState(true);
         statusLabel.setText("Deleting " + tableRows.size() + " comment(s) via YouTube API...");
 
         new SwingWorker<Set<String>, Void>() {
@@ -553,7 +532,7 @@ public class YouTubeCommentSearchApp extends JFrame {
 
             @Override
             protected void done() {
-                setImportingState(true);
+                setImportingState(false);
                 try {
                     Set<String> deletedIds = get();
 
