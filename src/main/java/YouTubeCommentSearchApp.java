@@ -15,6 +15,7 @@ import java.io.File;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Files;
+import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
@@ -23,6 +24,11 @@ import java.util.regex.Pattern;
 public class YouTubeCommentSearchApp extends JFrame {
     private JTextField channelFilterField;
     private JTextField videoFilterField;
+    private JTextField commentFilterField;
+    private JCheckBox dateFromCheck;
+    private JSpinner  dateFromSpinner;
+    private JCheckBox dateToCheck;
+    private JSpinner  dateToSpinner;
     private JTable commentsTable;
     private DefaultTableModel tableModel;
     private TableRowSorter<DefaultTableModel> rowSorter;
@@ -77,6 +83,7 @@ public class YouTubeCommentSearchApp extends JFrame {
         gbc.insets = new Insets(2, 4, 2, 4);
         topPanel.add(new JLabel("Channel:"), gbc);
         gbc.gridx = 1;
+        gbc.gridwidth = 4;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
         channelFilterField = new JTextField(20);
@@ -84,17 +91,57 @@ public class YouTubeCommentSearchApp extends JFrame {
 
         gbc.gridx = 0;
         gbc.gridy = 1;
+        gbc.gridwidth = 1;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
         topPanel.add(new JLabel("Video/Post:"), gbc);
         gbc.gridx = 1;
+        gbc.gridwidth = 4;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
         videoFilterField = new JTextField(20);
         topPanel.add(videoFilterField, gbc);
 
+        gbc.gridx = 0;
+        gbc.gridy = 2;
+        gbc.gridwidth = 1;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        topPanel.add(new JLabel("Comment:"), gbc);
+        gbc.gridx = 1;
+        gbc.gridwidth = 4;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        commentFilterField = new JTextField(20);
+        topPanel.add(commentFilterField, gbc);
+
+        gbc.gridx = 0;
+        gbc.gridy = 3;
+        gbc.gridwidth = 1;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        dateFromCheck = new JCheckBox("Date from:");
+        topPanel.add(dateFromCheck, gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        dateFromSpinner = makeDateSpinner();
+        dateFromSpinner.setEnabled(false);
+        topPanel.add(dateFromSpinner, gbc);
+
         gbc.gridx = 2;
-        gbc.gridy = 1;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        dateToCheck = new JCheckBox("to:");
+        topPanel.add(dateToCheck, gbc);
+        gbc.gridx = 3;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        dateToSpinner = makeDateSpinner();
+        dateToSpinner.setEnabled(false);
+        topPanel.add(dateToSpinner, gbc);
+
+        gbc.gridx = 4;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
         clearFiltersButton = new JButton("Clear");
@@ -185,13 +232,9 @@ public class YouTubeCommentSearchApp extends JFrame {
 
         deleteSelectedButton = new JButton("Delete Selected");
         deleteSelectedButton.setEnabled(false);
-        deleteSelectedButton.setBackground(new Color(220, 53, 69));
-        deleteSelectedButton.setForeground(Color.WHITE);
 
         deleteFilteredButton = new JButton("Delete All Filtered");
         deleteFilteredButton.setEnabled(false);
-        deleteFilteredButton.setBackground(new Color(220, 53, 69));
-        deleteFilteredButton.setForeground(Color.WHITE);
 
         bottomPanel.add(deleteSelectedButton);
         bottomPanel.add(deleteFilteredButton);
@@ -213,6 +256,17 @@ public class YouTubeCommentSearchApp extends JFrame {
         deleteFilteredButton.addActionListener(e -> deleteFilteredComments());
         addRealTimeFilter(channelFilterField);
         addRealTimeFilter(videoFilterField);
+        addRealTimeFilter(commentFilterField);
+        dateFromCheck.addActionListener(e -> {
+            dateFromSpinner.setEnabled(dateFromCheck.isSelected());
+            applyFilters();
+        });
+        dateFromSpinner.addChangeListener(e -> applyFilters());
+        dateToCheck.addActionListener(e -> {
+            dateToSpinner.setEnabled(dateToCheck.isSelected());
+            applyFilters();
+        });
+        dateToSpinner.addChangeListener(e -> applyFilters());
     }
 
     /** Applies filters on every keystroke in the given field. */
@@ -414,23 +468,43 @@ public class YouTubeCommentSearchApp extends JFrame {
     }
 
     private void applyFilters() {
-        String channelFilter = channelFilterField.getText().trim();
-        String videoFilter   = videoFilterField.getText().trim();
+        String channelFilter  = channelFilterField.getText().trim();
+        String videoFilter    = videoFilterField.getText().trim();
+        String commentFilter  = commentFilterField.getText().trim();
+        SimpleDateFormat dateFmt = new SimpleDateFormat("yyyy-MM-dd");
+        String dateFrom = dateFromCheck.isSelected() ? dateFmt.format((Date) dateFromSpinner.getValue()) : "";
+        String dateTo   = dateToCheck.isSelected()   ? dateFmt.format((Date) dateToSpinner.getValue())   : "";
         List<RowFilter<Object, Object>> filters = new ArrayList<>();
 
         if (!channelFilter.isEmpty()) {
-            // Pattern.quote treats the input as a literal string (no regex special chars)
-            filters.add(RowFilter.regexFilter("(?i)" + Pattern.quote(channelFilter), 2));
+            filters.add(RowFilter.regexFilter("(?iu)" + Pattern.quote(channelFilter), 2));
         }
         if (!videoFilter.isEmpty()) {
-            filters.add(RowFilter.regexFilter("(?i)" + Pattern.quote(videoFilter), 3));
+            filters.add(RowFilter.regexFilter("(?iu)" + Pattern.quote(videoFilter), 3));
+        }
+        if (!commentFilter.isEmpty()) {
+            filters.add(RowFilter.regexFilter("(?iu)" + Pattern.quote(commentFilter), 4));
+        }
+        if (!dateFrom.isEmpty() || !dateTo.isEmpty()) {
+            filters.add(new RowFilter<>() {
+                @Override
+                public boolean include(Entry<? extends Object, ? extends Object> entry) {
+                    String date = (String) entry.getValue(5); // model col 5 = Date
+                    if (date == null || date.isEmpty()) return false;
+                    if (!dateFrom.isEmpty() && date.compareTo(dateFrom) < 0) return false;
+                    if (!dateTo.isEmpty()   && date.compareTo(dateTo)   > 0) return false;
+                    return true;
+                }
+            });
         }
 
         rowSorter.setRowFilter(filters.isEmpty() ? null : RowFilter.andFilter(filters));
 
         int visible = commentsTable.getRowCount();
         int total   = tableModel.getRowCount();
-        if (!channelFilter.isEmpty() || !videoFilter.isEmpty()) {
+        boolean anyFilter = !channelFilter.isEmpty() || !videoFilter.isEmpty()
+                || !commentFilter.isEmpty() || !dateFrom.isEmpty() || !dateTo.isEmpty();
+        if (anyFilter) {
             statusLabel.setText("Showing " + visible + " of " + total + " comments");
         } else if (total > 0) {
             statusLabel.setText("Showing all " + total + " comments");
@@ -440,6 +514,11 @@ public class YouTubeCommentSearchApp extends JFrame {
     private void clearFilters() {
         channelFilterField.setText("");
         videoFilterField.setText("");
+        commentFilterField.setText("");
+        dateFromCheck.setSelected(false);
+        dateFromSpinner.setEnabled(false);
+        dateToCheck.setSelected(false);
+        dateToSpinner.setEnabled(false);
         rowSorter.setRowFilter(null);
         statusLabel.setText("Filters cleared");
     }
@@ -556,6 +635,13 @@ public class YouTubeCommentSearchApp extends JFrame {
                 }
             }
         }.execute();
+    }
+
+    private static JSpinner makeDateSpinner() {
+        JSpinner spinner = new JSpinner(new SpinnerDateModel());
+        JSpinner.DateEditor editor = new JSpinner.DateEditor(spinner, "yyyy-MM-dd");
+        spinner.setEditor(editor);
+        return spinner;
     }
 
     private void loadAllComments() {
