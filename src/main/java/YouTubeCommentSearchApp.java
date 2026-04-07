@@ -17,6 +17,7 @@ import java.net.URI;
 import java.nio.file.Files;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.util.prefs.Preferences;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.regex.Pattern;
@@ -44,6 +45,7 @@ public class YouTubeCommentSearchApp extends JFrame {
     private YouTubeClient youTubeClient = null;
     private List<Comment> allComments = new ArrayList<>();
     private final KeyringStore keyringStore = new KeyringStore();
+    private final Preferences prefs = Preferences.userNodeForPackage(YouTubeCommentSearchApp.class);
 
     public YouTubeCommentSearchApp() {
         setupUI();
@@ -295,7 +297,10 @@ public class YouTubeCommentSearchApp extends JFrame {
             JFileChooser fileChooser = new JFileChooser();
             fileChooser.setDialogTitle("Select client_secrets.json (download from Google Cloud Console \u2192 APIs & Services \u2192 Credentials)");
             fileChooser.setFileFilter(new FileNameExtensionFilter("JSON files", "json"));
+            String lastLoginDir = prefs.get("lastLoginDir", null);
+            if (lastLoginDir != null) fileChooser.setCurrentDirectory(new File(lastLoginDir));
             if (fileChooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) return;
+            prefs.put("lastLoginDir", fileChooser.getSelectedFile().getParent());
             try {
                 String json = Files.readString(fileChooser.getSelectedFile().toPath());
                 keyringStore.save(json);
@@ -371,7 +376,10 @@ public class YouTubeCommentSearchApp extends JFrame {
         JFileChooser fileChooser = new JFileChooser();
         fileChooser.setDialogTitle("Select Google Takeout comments CSV file");
         fileChooser.setFileFilter(new FileNameExtensionFilter("CSV files", "csv"));
+        String lastImportDir = prefs.get("lastImportDir", null);
+        if (lastImportDir != null) fileChooser.setCurrentDirectory(new File(lastImportDir));
         if (fileChooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) return;
+        prefs.put("lastImportDir", fileChooser.getSelectedFile().getParent());
 
         File csvFile = fileChooser.getSelectedFile();
         String authorName = currentUser != null ? currentUser : "me";
