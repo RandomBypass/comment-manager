@@ -1,5 +1,5 @@
-import config.KeyringStore;
 import dto.Comment;
+import dto.VideoInfo;
 import youtube.TakeoutImporter;
 import youtube.YouTubeClient;
 
@@ -14,22 +14,28 @@ import java.awt.event.MouseMotionAdapter;
 import java.io.File;
 import java.io.IOException;
 import java.net.URI;
-import java.nio.file.Files;
 import java.text.SimpleDateFormat;
-import java.util.*;
-import java.util.prefs.Preferences;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Date;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
+import java.util.prefs.Preferences;
 import java.util.regex.Pattern;
 
 public class YouTubeCommentSearchApp extends JFrame {
+    private final Preferences prefs = Preferences.userNodeForPackage(YouTubeCommentSearchApp.class);
     private JTextField channelFilterField;
     private JTextField videoFilterField;
     private JTextField commentFilterField;
     private JCheckBox dateFromCheck;
-    private JSpinner  dateFromSpinner;
+    private JSpinner dateFromSpinner;
     private JCheckBox dateToCheck;
-    private JSpinner  dateToSpinner;
+    private JSpinner dateToSpinner;
     private JTable commentsTable;
     private DefaultTableModel tableModel;
     private TableRowSorter<DefaultTableModel> rowSorter;
@@ -40,18 +46,33 @@ public class YouTubeCommentSearchApp extends JFrame {
     private JButton importButton;
     private JLabel statusLabel;
     private JLabel userLabel;
-
     private String currentUser = null;
     private YouTubeClient youTubeClient = null;
     private List<Comment> allComments = new ArrayList<>();
-    private final KeyringStore keyringStore = new KeyringStore();
-    private final Preferences prefs = Preferences.userNodeForPackage(YouTubeCommentSearchApp.class);
 
     public YouTubeCommentSearchApp() {
         setupUI();
         setupEventHandlers();
         setVisible(true);
-        autoLoginFromKeyring();
+        autoLogin();
+    }
+
+    private static JSpinner makeDateSpinner() {
+        JSpinner spinner = new JSpinner(new SpinnerDateModel());
+        JSpinner.DateEditor editor = new JSpinner.DateEditor(spinner, "yyyy-MM-dd");
+        spinner.setEditor(editor);
+        return spinner;
+    }
+
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(() -> {
+            try {
+                UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            new YouTubeCommentSearchApp();
+        });
     }
 
     private void setupUI() {
@@ -271,46 +292,41 @@ public class YouTubeCommentSearchApp extends JFrame {
         dateToSpinner.addChangeListener(e -> applyFilters());
     }
 
-    /** Applies filters on every keystroke in the given field. */
+    /**
+     * Applies filters on every keystroke in the given field.
+     */
     private void addRealTimeFilter(JTextField field) {
         field.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
-            public void insertUpdate(javax.swing.event.DocumentEvent e) { applyFilters(); }
-            public void removeUpdate(javax.swing.event.DocumentEvent e) { applyFilters(); }
-            public void changedUpdate(javax.swing.event.DocumentEvent e) { applyFilters(); }
+            public void insertUpdate(javax.swing.event.DocumentEvent e) {
+                applyFilters();
+            }
+
+            public void removeUpdate(javax.swing.event.DocumentEvent e) {
+                applyFilters();
+            }
+
+            public void changedUpdate(javax.swing.event.DocumentEvent e) {
+                applyFilters();
+            }
         });
     }
 
     /**
-     * Attempts silent background login using client secrets stored in the OS keyring.
-     * If a valid refresh token is cached no browser interaction is needed.
-     * Does nothing if no secrets are in the keyring yet.
+     * Silent background login. Runs only if the user has logged in before
+     * (client ID stored in Preferences AND a refresh token cached on disk).
+     * Never opens a browser without explicit user action.
      */
-    private void autoLoginFromKeyring() {
-        String json = keyringStore.load();
-        if (json == null) return;
+    private void autoLogin() {
+        if (!YouTubeClient.hasStoredRefreshToken()) return;
         statusLabel.setText("Authenticating in background...");
-        loginWithYouTube(json);
+        loginWithYouTube();
     }
 
     private void handleLogin() {
         if (currentUser == null) {
-            JFileChooser fileChooser = new JFileChooser();
-            fileChooser.setDialogTitle("Select client_secrets.json (download from Google Cloud Console \u2192 APIs & Services \u2192 Credentials)");
-            fileChooser.setFileFilter(new FileNameExtensionFilter("JSON files", "json"));
-            String lastLoginDir = prefs.get("lastLoginDir", null);
-            if (lastLoginDir != null) fileChooser.setCurrentDirectory(new File(lastLoginDir));
-            if (fileChooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) return;
-            prefs.put("lastLoginDir", fileChooser.getSelectedFile().getParent());
-            try {
-                String json = Files.readString(fileChooser.getSelectedFile().toPath());
-                keyringStore.save(json);
-                loginWithYouTube(json);
-            } catch (Exception e) {
-                JOptionPane.showMessageDialog(this,
-                        "Failed to read or secure credentials: " + e.getMessage(),
-                        "Error", JOptionPane.ERROR_MESSAGE);
-            }
+            loginWithYouTube();
         } else {
+            YouTubeClient.clearStoredToken();
             youTubeClient = null;
             currentUser = null;
             allComments.clear();
@@ -319,18 +335,24 @@ public class YouTubeCommentSearchApp extends JFrame {
             loginButton.setText("Login with Google");
             deleteSelectedButton.setEnabled(false);
             deleteFilteredButton.setEnabled(false);
-            statusLabel.setText("Logged out. Comments remain loaded; login again to enable deletion.");
+            statusLabel.setText("Logged out.");
         }
     }
 
-    private void loginWithYouTube(String secretsJson) {
+    /**
+     * If the user is logged in, fetches real video titles and channel names from the
+     * YouTube API to replace the raw IDs stored by the Takeout importer.
+     * Runs in the background; reloads the table when done.
+     */
+
+    private void loginWithYouTube() {
         statusLabel.setText("Opening browser for Google authorization...");
         loginButton.setEnabled(false);
 
         new SwingWorker<YouTubeClient, Void>() {
             @Override
             protected YouTubeClient doInBackground() throws Exception {
-                return YouTubeClient.authenticate(secretsJson);
+                return YouTubeClient.authenticate();
             }
 
             @Override
@@ -360,16 +382,16 @@ public class YouTubeCommentSearchApp extends JFrame {
     private void importFromTakeout() {
         JOptionPane.showMessageDialog(this,
                 "<html><b>Expected file structure</b><br><br>" +
-                "Export your comments from <b>takeout.google.com</b>:<br>" +
-                "YouTube and YouTube Music \u2192 Comments<br><br>" +
-                "Two CSV formats are supported (detected automatically):<br><br>" +
-                "<b>Standard (8 columns) \u2014 video comments only:</b><br>" +
-                "&nbsp;&nbsp;Comment ID, Channel ID, Date, Price, Parent comment ID,<br>" +
-                "&nbsp;&nbsp;Video ID, Comment text, Top-level comment ID<br><br>" +
-                "<b>Extended (9 columns) \u2014 video and post comments:</b><br>" +
-                "&nbsp;&nbsp;Comment ID, Channel ID, Date, Price, Parent comment ID,<br>" +
-                "&nbsp;&nbsp;<u>Post ID</u>, Video ID, Comment text, Top-level comment ID<br><br>" +
-                "Column headers may be in any language; column order is fixed.</html>",
+                        "Export your comments from <b>takeout.google.com</b>:<br>" +
+                        "YouTube and YouTube Music \u2192 Comments<br><br>" +
+                        "Two CSV formats are supported (detected automatically):<br><br>" +
+                        "<b>Standard (8 columns) — video comments only:</b><br>" +
+                        "&nbsp;&nbsp;Comment ID, Channel ID, Date, Price, Parent comment ID,<br>" +
+                        "&nbsp;&nbsp;Video ID, Comment text, Top-level comment ID<br><br>" +
+                        "<b>Extended (9 columns) — video and post comments:</b><br>" +
+                        "&nbsp;&nbsp;Comment ID, Channel ID, Date, Price, Parent comment ID,<br>" +
+                        "&nbsp;&nbsp;<u>Post ID</u>, Video ID, Comment text, Top-level comment ID<br><br>" +
+                        "Column headers may be in any language; column order is fixed.</html>",
                 "Import from Google Takeout",
                 JOptionPane.INFORMATION_MESSAGE);
 
@@ -413,11 +435,6 @@ public class YouTubeCommentSearchApp extends JFrame {
     }
 
     /**
-     * If the user is logged in, fetches real video titles and channel names from the
-     * YouTube API to replace the raw IDs stored by the Takeout importer.
-     * Runs in the background; reloads the table when done.
-     */
-    /**
      * If the user is logged in, fetches real video titles and the names of the channels
      * where comments were published (via the video's owning channel, not the CSV's
      * "channel ID" column which holds the commenter's own channel ID).
@@ -435,7 +452,7 @@ public class YouTubeCommentSearchApp extends JFrame {
         statusLabel.setText("Resolving video titles and channel names...");
 
         new SwingWorker<Void, Void>() {
-            Map<String, YouTubeClient.VideoInfo> videoInfo;
+            Map<String, VideoInfo> videoInfo;
 
             @Override
             protected Void doInBackground() throws Exception {
@@ -449,7 +466,7 @@ public class YouTubeCommentSearchApp extends JFrame {
                     get();
                     List<Comment> resolved = new ArrayList<>();
                     for (Comment c : allComments) {
-                        YouTubeClient.VideoInfo info = videoInfo.get(c.video());
+                        VideoInfo info = videoInfo.get(c.video());
                         resolved.add(info == null ? c : new Comment(
                                 c.id(), c.user(),
                                 info.channelTitle(), // channel where the video/comment lives
@@ -476,12 +493,12 @@ public class YouTubeCommentSearchApp extends JFrame {
     }
 
     private void applyFilters() {
-        String channelFilter  = channelFilterField.getText().trim();
-        String videoFilter    = videoFilterField.getText().trim();
-        String commentFilter  = commentFilterField.getText().trim();
+        String channelFilter = channelFilterField.getText().trim();
+        String videoFilter = videoFilterField.getText().trim();
+        String commentFilter = commentFilterField.getText().trim();
         SimpleDateFormat dateFmt = new SimpleDateFormat("yyyy-MM-dd");
         String dateFrom = dateFromCheck.isSelected() ? dateFmt.format((Date) dateFromSpinner.getValue()) : "";
-        String dateTo   = dateToCheck.isSelected()   ? dateFmt.format((Date) dateToSpinner.getValue())   : "";
+        String dateTo = dateToCheck.isSelected() ? dateFmt.format((Date) dateToSpinner.getValue()) : "";
         List<RowFilter<Object, Object>> filters = new ArrayList<>();
 
         if (!channelFilter.isEmpty()) {
@@ -496,12 +513,11 @@ public class YouTubeCommentSearchApp extends JFrame {
         if (!dateFrom.isEmpty() || !dateTo.isEmpty()) {
             filters.add(new RowFilter<>() {
                 @Override
-                public boolean include(Entry<? extends Object, ? extends Object> entry) {
+                public boolean include(Entry<?, ?> entry) {
                     String date = (String) entry.getValue(5); // model col 5 = Date
                     if (date == null || date.isEmpty()) return false;
                     if (!dateFrom.isEmpty() && date.compareTo(dateFrom) < 0) return false;
-                    if (!dateTo.isEmpty()   && date.compareTo(dateTo)   > 0) return false;
-                    return true;
+                    return dateTo.isEmpty() || date.compareTo(dateTo) <= 0;
                 }
             });
         }
@@ -509,7 +525,7 @@ public class YouTubeCommentSearchApp extends JFrame {
         rowSorter.setRowFilter(filters.isEmpty() ? null : RowFilter.andFilter(filters));
 
         int visible = commentsTable.getRowCount();
-        int total   = tableModel.getRowCount();
+        int total = tableModel.getRowCount();
         boolean anyFilter = !channelFilter.isEmpty() || !videoFilter.isEmpty()
                 || !commentFilter.isEmpty() || !dateFrom.isEmpty() || !dateTo.isEmpty();
         if (anyFilter) {
@@ -645,13 +661,6 @@ public class YouTubeCommentSearchApp extends JFrame {
         }.execute();
     }
 
-    private static JSpinner makeDateSpinner() {
-        JSpinner spinner = new JSpinner(new SpinnerDateModel());
-        JSpinner.DateEditor editor = new JSpinner.DateEditor(spinner, "yyyy-MM-dd");
-        spinner.setEditor(editor);
-        return spinner;
-    }
-
     private void loadAllComments() {
         tableModel.setRowCount(0);
         for (Comment comment : allComments) {
@@ -660,16 +669,5 @@ public class YouTubeCommentSearchApp extends JFrame {
                     comment.text(), comment.date(), comment.videoUrl(), comment.id()
             });
         }
-    }
-
-    public static void main(String[] args) {
-        SwingUtilities.invokeLater(() -> {
-            try {
-                UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-            new YouTubeCommentSearchApp();
-        });
     }
 }
