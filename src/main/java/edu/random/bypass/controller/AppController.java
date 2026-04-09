@@ -2,10 +2,10 @@ package edu.random.bypass.controller;
 
 import edu.random.bypass.dto.Comment;
 import edu.random.bypass.dto.VideoInfo;
-import edu.random.bypass.model.CommentsModel;
-import edu.random.bypass.view.MainView;
-import edu.random.bypass.service.TakeoutImporter;
 import edu.random.bypass.integration.YouTubeClient;
+import edu.random.bypass.model.CommentsModel;
+import edu.random.bypass.service.TakeoutImporter;
+import edu.random.bypass.view.MainView;
 
 import javax.swing.*;
 import java.io.File;
@@ -211,10 +211,9 @@ public class AppController {
         for (int row : modelRows) ids.add(view.getCommentIdAt(row));
 
         if (!model.isLoggedIn()) {
-            // No API client: remove from edu.random.bypass.model only
             model.removeComments(new HashSet<>(ids));
             view.loadComments(model.getComments());
-            view.setStatus("Removed " + ids.size() + " comment(s) from edu.random.bypass.view.");
+            view.setStatus("Removed " + ids.size() + " comment(s) from view.");
             return;
         }
 
