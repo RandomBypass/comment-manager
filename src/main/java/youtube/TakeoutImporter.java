@@ -167,7 +167,10 @@ public class TakeoutImporter {
      * </ul>
      */
     private static List<List<String>> parseCsv(File file) throws IOException {
-        byte[] raw = new FileInputStream(file).readAllBytes();
+        byte[] raw;
+        try (FileInputStream fis = new FileInputStream(file)) {
+            raw = fis.readAllBytes();
+        }
 
         // Strip UTF-8 BOM (EF BB BF) if present
         int offset = (raw.length >= 3

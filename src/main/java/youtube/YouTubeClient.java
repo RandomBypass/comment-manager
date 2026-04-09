@@ -22,6 +22,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.io.Reader;
@@ -209,9 +210,11 @@ public class YouTubeClient {
         // Block until the browser redirects back to localhost:8888
         try (ServerSocket server = new ServerSocket(8888)) {
             server.setSoTimeout(300_000); // 5-minute window for the user to approve
-            try (Socket socket = server.accept()) {
-                BufferedReader in = new BufferedReader(
-                        new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
+            try (Socket socket = server.accept();
+                 BufferedReader in = new BufferedReader(
+                         new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
+                 PrintWriter out = new PrintWriter(
+                         new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8))) {
                 String requestLine = in.readLine(); // "GET /?code=...&scope=... HTTP/1.1"
 
                 // Reply so the browser shows a completion message
@@ -219,8 +222,6 @@ public class YouTubeClient {
                         + "<h2>Authorization complete!</h2>"
                         + "<p>You may close this window and return to the app.</p></body></html>";
                 byte[] bodyBytes = body.getBytes(StandardCharsets.UTF_8);
-                PrintWriter out = new PrintWriter(
-                        new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8));
                 out.print("HTTP/1.1 200 OK\r\n"
                         + "Content-Type: text/html; charset=utf-8\r\n"
                         + "Content-Length: " + bodyBytes.length + "\r\n\r\n"
@@ -287,20 +288,28 @@ public class YouTubeClient {
 
     private static JsonObject postForm(String body) throws IOException {
         HttpURLConnection conn = (HttpURLConnection) new URL(TOKEN_ENDPOINT).openConnection();
-        conn.setRequestMethod("POST");
-        conn.setDoOutput(true);
-        conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
-        byte[] bodyBytes = body.getBytes(StandardCharsets.UTF_8);
-        conn.setRequestProperty("Content-Length", String.valueOf(bodyBytes.length));
-        conn.getOutputStream().write(bodyBytes);
+        try {
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+            byte[] bodyBytes = body.getBytes(StandardCharsets.UTF_8);
+            conn.setRequestProperty("Content-Length", String.valueOf(bodyBytes.length));
+            try (OutputStream out = conn.getOutputStream()) {
+                out.write(bodyBytes);
+            }
 
-        int status = conn.getResponseCode();
-        InputStream is = status < 400 ? conn.getInputStream() : conn.getErrorStream();
-        String response = new String(is.readAllBytes(), StandardCharsets.UTF_8);
-        if (status >= 400) {
-            throw new IOException("Token request failed (HTTP " + status + "): " + response);
+            int status = conn.getResponseCode();
+            String response;
+            try (InputStream is = status < 400 ? conn.getInputStream() : conn.getErrorStream()) {
+                response = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+            }
+            if (status >= 400) {
+                throw new IOException("Token request failed (HTTP " + status + "): " + response);
+            }
+            return JsonParser.parseString(response).getAsJsonObject();
+        } finally {
+            conn.disconnect();
         }
-        return JsonParser.parseString(response).getAsJsonObject();
     }
 
     private static String enc(String s) {
@@ -331,7 +340,7 @@ public class YouTubeClient {
         InputStream is = YouTubeClient.class.getResourceAsStream(CLIENT_SECRETS_RESOURCE);
         if (is == null) {
             throw new IOException("client_secret.json not found in resources. "
-                    + "Download it from Google Cloud Console → APIs & Services → Credentials "
+                    + "Download it from Google Cloud Console \u2192 APIs & Services \u2192 Credentials "
                     + "and place it at src/main/resources/client_secret.json.");
         }
         try (Reader reader = new InputStreamReader(is, StandardCharsets.UTF_8)) {
