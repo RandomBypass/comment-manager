@@ -1,4 +1,4 @@
-package youtube;
+package edu.random.bypass.integration;
 
 import com.github.javakeyring.Keyring;
 import com.google.api.client.auth.oauth2.BearerToken;
@@ -15,7 +15,7 @@ import com.google.api.services.youtube.model.Video;
 import com.google.api.services.youtube.model.VideoListResponse;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import dto.VideoInfo;
+import edu.random.bypass.dto.VideoInfo;
 
 import java.awt.*;
 import java.io.BufferedReader;

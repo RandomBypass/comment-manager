@@ -1,4 +1,4 @@
-package config;
+package edu.random.bypass.config;
 
 import com.github.javakeyring.BackendNotSupportedException;
 import com.github.javakeyring.Keyring;

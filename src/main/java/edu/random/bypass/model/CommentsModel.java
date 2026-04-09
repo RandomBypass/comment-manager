@@ -1,7 +1,7 @@
-package model;
+package edu.random.bypass.model;
 
-import dto.Comment;
-import youtube.YouTubeClient;
+import edu.random.bypass.dto.Comment;
+import edu.random.bypass.integration.YouTubeClient;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -9,7 +9,7 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Application model: holds the comment list and authentication state.
+ * Application edu.random.bypass.model: holds the comment list and authentication state.
  * No threading, no UI — pure data store.
  */
 public class CommentsModel {

@@ -1,11 +1,11 @@
-package controller;
+package edu.random.bypass.controller;
 
-import dto.Comment;
-import dto.VideoInfo;
-import model.CommentsModel;
-import view.MainView;
-import youtube.TakeoutImporter;
-import youtube.YouTubeClient;
+import edu.random.bypass.dto.Comment;
+import edu.random.bypass.dto.VideoInfo;
+import edu.random.bypass.model.CommentsModel;
+import edu.random.bypass.view.MainView;
+import edu.random.bypass.service.TakeoutImporter;
+import edu.random.bypass.integration.YouTubeClient;
 
 import javax.swing.*;
 import java.io.File;
@@ -21,7 +21,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.prefs.Preferences;
 
 /**
- * Application controller (MVC). Wires {@link MainView} events to {@link CommentsModel} state
+ * Application edu.random.bypass.controller (MVC). Wires {@link MainView} events to {@link CommentsModel} state
  * changes and runs all background work via {@link SwingWorker}.
  */
 public class AppController {
@@ -37,7 +37,7 @@ public class AppController {
     }
 
     /**
-     * Called after the view is shown. Attempts silent background login if credentials are cached.
+     * Called after the edu.random.bypass.view is shown. Attempts silent background login if credentials are cached.
      */
     public void start() {
         if (!YouTubeClient.hasStoredRefreshToken()) return;
@@ -211,10 +211,10 @@ public class AppController {
         for (int row : modelRows) ids.add(view.getCommentIdAt(row));
 
         if (!model.isLoggedIn()) {
-            // No API client: remove from model only
+            // No API client: remove from edu.random.bypass.model only
             model.removeComments(new HashSet<>(ids));
             view.loadComments(model.getComments());
-            view.setStatus("Removed " + ids.size() + " comment(s) from view.");
+            view.setStatus("Removed " + ids.size() + " comment(s) from edu.random.bypass.view.");
             return;
         }
 

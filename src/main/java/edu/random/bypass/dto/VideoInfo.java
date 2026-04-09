@@ -1,4 +1,4 @@
-package dto;
+package edu.random.bypass.dto;
 
 /**
  * Holds the resolved title and owning channel name for a single video.

@@ -1,6 +1,6 @@
-package youtube;
+package edu.random.bypass.service;
 
-import dto.Comment;
+import edu.random.bypass.dto.Comment;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;

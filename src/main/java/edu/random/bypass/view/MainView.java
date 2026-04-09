@@ -1,6 +1,6 @@
-package view;
+package edu.random.bypass.view;
 
-import dto.Comment;
+import edu.random.bypass.dto.Comment;
 
 import javax.swing.*;
 import javax.swing.filechooser.FileNameExtensionFilter;
@@ -20,18 +20,18 @@ import java.util.regex.Pattern;
 
 /**
  * The application's main window (View in MVC).
- * <p>Owns all Swing components and exposes a clean API for the controller to:
+ * <p>Owns all Swing components and exposes a clean API for the edu.random.bypass.controller to:
  * <ul>
  *   <li>update display state ({@link #setStatus}, {@link #onLoggedIn}, {@link #onLoggedOut}, {@link #setBusy})</li>
  *   <li>populate the table ({@link #loadComments})</li>
  *   <li>read user selections ({@link #getCheckedModelRows}, {@link #getVisibleModelRows}, {@link #getCommentIdAt})</li>
  *   <li>show dialogs ({@link #showImportFileChooser}, {@link #confirmDelete}, {@link #confirmBatchDelete}, {@link #showError})</li>
  * </ul>
- * Filter application, Clear button, and link-click handling are wired internally and require no controller involvement.
+ * Filter application, Clear button, and link-click handling are wired internally and require no edu.random.bypass.controller involvement.
  */
 public class MainView extends JFrame {
 
-    // ── Table column indices (model) ──────────────────────────────────────────
+    // ── Table column indices (edu.random.bypass.model) ──────────────────────────────────────────
     private static final int COL_SELECT = 0;
     private static final int COL_CHANNEL = 2;
     private static final int COL_VIDEO = 3;
@@ -53,7 +53,7 @@ public class MainView extends JFrame {
                     + "&nbsp;&nbsp;<u>Post ID</u>, Video ID, Comment text, Top-level comment ID<br><br>"
                     + "Column headers may be in any language; column order is fixed.</html>";
 
-    // ── Widgets exposed to controller ─────────────────────────────────────────
+    // ── Widgets exposed to edu.random.bypass.controller ─────────────────────────────────────────
     private JButton loginButton;
     private JButton importButton;
     private JButton deleteSelectedButton;
@@ -128,7 +128,7 @@ public class MainView extends JFrame {
     // ── Controller-facing API: reading selections ─────────────────────────────
 
     /**
-     * Returns model-row indices whose Select checkbox is ticked.
+     * Returns edu.random.bypass.model-row indices whose Select checkbox is ticked.
      */
     public List<Integer> getCheckedModelRows() {
         List<Integer> rows = new ArrayList<>();
@@ -140,7 +140,7 @@ public class MainView extends JFrame {
     }
 
     /**
-     * Returns model-row indices for all currently visible (non-filtered) rows.
+     * Returns edu.random.bypass.model-row indices for all currently visible (non-filtered) rows.
      */
     public List<Integer> getVisibleModelRows() {
         List<Integer> rows = new ArrayList<>();
@@ -155,7 +155,7 @@ public class MainView extends JFrame {
     }
 
     /**
-     * Returns the YouTube comment ID stored in the hidden model column for the given model row.
+     * Returns the YouTube comment ID stored in the hidden edu.random.bypass.model column for the given edu.random.bypass.model row.
      */
     public String getCommentIdAt(int modelRow) {
         return (String) tableModel.getValueAt(modelRow, COL_ID);
@@ -366,7 +366,7 @@ public class MainView extends JFrame {
         deletePanel.add(deleteFilteredButton);
 
         statusLabel = new JLabel(
-                "Import a Google Takeout comments CSV to view comments. Login with Google to enable deletion.");
+                "Import a Google Takeout comments CSV to edu.random.bypass.view comments. Login with Google to enable deletion.");
         statusLabel.setBorder(BorderFactory.createEmptyBorder(5, 10, 5, 10));
 
         JPanel southPanel = new JPanel(new BorderLayout());
@@ -375,7 +375,7 @@ public class MainView extends JFrame {
         return southPanel;
     }
 
-    // ── Internal listeners (view-only concerns) ───────────────────────────────
+    // ── Internal listeners (edu.random.bypass.view-only concerns) ───────────────────────────────
 
     private void setupInternalListeners() {
         // Real-time text filters
