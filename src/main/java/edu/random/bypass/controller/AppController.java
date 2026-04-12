@@ -86,6 +86,7 @@ public class AppController {
                     model.setClient(client);
                     model.setCurrentUser(client.getChannelTitle());
                     view.onLoggedIn(model.getCurrentUser());
+                    view.updateQuota(client.getQuotaUsed(), YouTubeClient.DAILY_QUOTA_LIMIT);
                     view.setStatus("Logged in as " + model.getCurrentUser()
                             + ". Import a Takeout CSV to load comments.");
                 } catch (ExecutionException e) {
@@ -190,6 +191,7 @@ public class AppController {
                     List<Comment> resolved = get();
                     model.setComments(resolved);
                     view.loadComments(model.getComments());
+                    view.updateQuota(model.getClient().getQuotaUsed(), YouTubeClient.DAILY_QUOTA_LIMIT);
                     view.setStatus("Loaded " + resolved.size() + " comments with titles resolved.");
                 } catch (Exception ignored) {
                     // Non-fatal: raw IDs already shown as fallback
@@ -206,6 +208,7 @@ public class AppController {
             JOptionPane.showMessageDialog(view, "No comments selected for deletion.");
             return;
         }
+        if (model.isLoggedIn() && !hasQuotaFor(modelRows.size())) return;
         if (view.confirmDelete(modelRows.size())) {
             deleteByModelRows(modelRows);
         }
@@ -217,9 +220,25 @@ public class AppController {
             JOptionPane.showMessageDialog(view, "No comments visible to delete.");
             return;
         }
+        if (model.isLoggedIn() && !hasQuotaFor(visible)) return;
         if (view.confirmBatchDelete(visible)) {
             deleteByModelRows(view.getVisibleModelRows());
         }
+    }
+
+    /**
+     * Returns {@code true} if the API client has enough estimated quota to delete
+     * {@code count} comments. Shows an error dialog and returns {@code false} otherwise.
+     */
+    private boolean hasQuotaFor(int count) {
+        int needed = count * YouTubeClient.QUOTA_COST_DELETE;
+        int remaining = model.getClient().getQuotaRemaining();
+        if (remaining >= needed) return true;
+        view.showError("Insufficient Quota",
+                String.format("Deleting %,d comment(s) requires %,d quota units, "
+                                + "but only %,d are estimated to remain today.",
+                        count, needed, remaining));
+        return false;
     }
 
     private void deleteByModelRows(List<Integer> modelRows) {
@@ -261,6 +280,7 @@ public class AppController {
                     Set<String> deletedIds = get();
                     model.removeComments(deletedIds);
                     view.loadComments(model.getComments());
+                    view.updateQuota(model.getClient().getQuotaUsed(), YouTubeClient.DAILY_QUOTA_LIMIT);
 
                     int failed = ids.size() - deletedIds.size();
                     if (failed > 0) {

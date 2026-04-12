@@ -45,6 +45,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class YouTubeClient {
 
@@ -58,12 +59,24 @@ public class YouTubeClient {
     private static final String AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
     private static final String TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 
+    /**
+     * Default daily quota limit for the YouTube Data API v3.
+     */
+    public static final int DAILY_QUOTA_LIMIT = 10_000;
+    /**
+     * Quota cost of a single {@code comments.delete} call.
+     */
+    public static final int QUOTA_COST_DELETE = 50;
+    private static final int QUOTA_COST_LIST = 1; // videos.list / channels.list per batch
+
     private final YouTube youtube;
     private final String channelTitle;
+    private final AtomicInteger quotaUsed;
 
-    private YouTubeClient(YouTube youtube, String channelTitle) {
+    private YouTubeClient(YouTube youtube, String channelTitle, int initialQuotaUsed) {
         this.youtube = youtube;
         this.channelTitle = channelTitle;
+        this.quotaUsed = new AtomicInteger(initialQuotaUsed);
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -95,9 +108,7 @@ public class YouTubeClient {
         return doFullPkceFlow(clientId, clientSecret);
     }
 
-    /**
-     * Returns {@code true} if a cached refresh token exists in the OS keyring (silent login possible).
-     */
+    /** Returns {@code true} if a cached refresh token exists in the OS keyring (silent login possible). */
     public static boolean hasStoredRefreshToken() {
         return loadRefreshToken() != null;
     }
@@ -116,6 +127,14 @@ public class YouTubeClient {
         return channelTitle;
     }
 
+    public int getQuotaUsed() {
+        return quotaUsed.get();
+    }
+
+    public int getQuotaRemaining() {
+        return DAILY_QUOTA_LIMIT - quotaUsed.get();
+    }
+
     /**
      * Fetches video title and channel name for the given video IDs,
      * in batches of 50 (API limit).
@@ -129,6 +148,7 @@ public class YouTubeClient {
                     .list(List.of("snippet"))
                     .setId(batch)
                     .execute();
+            quotaUsed.addAndGet(QUOTA_COST_LIST);
             if (response.getItems() != null) {
                 for (Video v : response.getItems()) {
                     info.put(v.getId(), new VideoInfo(
@@ -154,6 +174,7 @@ public class YouTubeClient {
                     .list(List.of("snippet"))
                     .setId(batch)
                     .execute();
+            quotaUsed.addAndGet(QUOTA_COST_LIST);
             if (response.getItems() != null) {
                 for (Channel ch : response.getItems()) {
                     titles.put(ch.getId(), ch.getSnippet().getTitle());
@@ -165,6 +186,7 @@ public class YouTubeClient {
 
     public void deleteComment(String commentId) throws IOException {
         youtube.comments().delete(commentId).execute();
+        quotaUsed.addAndGet(QUOTA_COST_DELETE);
     }
 
     // ── PKCE flow ─────────────────────────────────────────────────────────────
@@ -214,7 +236,7 @@ public class YouTubeClient {
             throw new IOException("No YouTube channel found for the authenticated account.");
         }
 
-        return new YouTubeClient(youtube, resp.getItems().get(0).getSnippet().getTitle());
+        return new YouTubeClient(youtube, resp.getItems().get(0).getSnippet().getTitle(), QUOTA_COST_LIST);
     }
 
     // ── Browser redirect / local server ───────────────────────────────────────
@@ -261,8 +283,10 @@ public class YouTubeClient {
                 if (requestLine == null) throw new IOException("Empty HTTP callback from browser.");
 
                 int queryStart = requestLine.indexOf('?');
-                int pathEnd = requestLine.lastIndexOf(' ');
-                if (queryStart < 0) throw new IOException("No query string in callback: " + requestLine);
+                int pathEnd    = requestLine.lastIndexOf(' ');
+                if (queryStart < 0) {
+                    throw new IOException("No query string in callback: " + requestLine);
+                }
                 String query = requestLine.substring(queryStart + 1, pathEnd > queryStart ? pathEnd : requestLine.length());
 
                 String code = extractQueryParam(query, "code");

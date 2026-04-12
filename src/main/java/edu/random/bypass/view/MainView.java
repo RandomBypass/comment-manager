@@ -53,7 +53,12 @@ public class MainView extends JFrame {
                     + "&nbsp;&nbsp;<u>Post ID</u>, Video ID, Comment text, Top-level comment ID<br><br>"
                     + "Column headers may be in any language; column order is fixed.</html>";
 
-    // ── Widgets exposed to edu.random.bypass.controller ─────────────────────────────────────────
+    /**
+     * Cost of one comments.delete call in quota units (mirrors YouTubeClient constant).
+     */
+    private static final int QUOTA_COST_PER_DELETE = 50;
+
+    // ── Widgets exposed to controller ─────────────────────────────────────────
     private JButton loginButton;
     private JButton importButton;
     private JButton deleteSelectedButton;
@@ -61,7 +66,12 @@ public class MainView extends JFrame {
 
     // ── Internal widgets ──────────────────────────────────────────────────────
     private JLabel userLabel;
+    private JLabel quotaLabel;
     private JLabel statusLabel;
+
+    // ── Button-state tracking ─────────────────────────────────────────────────
+    private boolean loggedIn = false;
+    private int quotaRemaining = 0;
     private JTextField channelFilterField;
     private JTextField videoFilterField;
     private JTextField commentFilterField;
@@ -86,31 +96,62 @@ public class MainView extends JFrame {
     }
 
     public void onLoggedIn(String userName) {
+        loggedIn = true;
         userLabel.setText(userName);
         loginButton.setText("Logout");
-        deleteSelectedButton.setEnabled(true);
-        deleteFilteredButton.setEnabled(true);
+        refreshDeleteButtons();
     }
 
     public void onLoggedOut() {
+        loggedIn = false;
+        quotaRemaining = 0;
         userLabel.setText("Not logged in");
         loginButton.setText("Login with Google");
-        deleteSelectedButton.setEnabled(false);
-        deleteFilteredButton.setEnabled(false);
+        quotaLabel.setVisible(false);
+        refreshDeleteButtons();
+    }
+
+    /**
+     * Updates the quota display and re-evaluates delete-button availability.
+     * Must be called after every successful YouTube API round-trip.
+     *
+     * @param used  cumulative quota units consumed this session
+     * @param limit daily quota limit (typically 10,000)
+     */
+    public void updateQuota(int used, int limit) {
+        quotaRemaining = limit - used;
+        quotaLabel.setText(String.format("API quota: %,d\u202F/\u202F%,d remaining (est.)",
+                quotaRemaining, limit));
+        quotaLabel.setForeground(
+                quotaRemaining < 200 ? Color.RED :
+                        quotaRemaining < 1000 ? new Color(200, 100, 0) :
+                                new Color(0, 150, 0));
+        quotaLabel.setVisible(true);
+        refreshDeleteButtons();
     }
 
     /**
      * Disables/enables all controls during a long-running background operation.
      *
      * @param busy     {@code true} while an operation is in progress
-     * @param loggedIn whether the user is currently authenticated (controls delete button state)
+     * @param loggedIn whether the user is currently authenticated
      */
     public void setBusy(boolean busy, boolean loggedIn) {
         loginButton.setEnabled(!busy);
         importButton.setEnabled(!busy);
         clearFiltersButton.setEnabled(!busy);
-        deleteSelectedButton.setEnabled(!busy && loggedIn);
-        deleteFilteredButton.setEnabled(!busy && loggedIn);
+        if (busy) {
+            deleteSelectedButton.setEnabled(false);
+            deleteFilteredButton.setEnabled(false);
+        } else {
+            refreshDeleteButtons();
+        }
+    }
+
+    private void refreshDeleteButtons() {
+        boolean canDelete = loggedIn && quotaRemaining >= QUOTA_COST_PER_DELETE;
+        deleteSelectedButton.setEnabled(canDelete);
+        deleteFilteredButton.setEnabled(canDelete);
     }
 
     // ── Controller-facing API: table management ───────────────────────────────
@@ -236,10 +277,14 @@ public class MainView extends JFrame {
         userLabel = new JLabel("Not logged in");
         loginButton = new JButton("Login with Google");
         importButton = new JButton("Import from Takeout...");
+        quotaLabel = new JLabel();
+        quotaLabel.setVisible(false);
         loginPanel.add(new JLabel("Account: "));
         loginPanel.add(userLabel);
         loginPanel.add(loginButton);
         loginPanel.add(importButton);
+        loginPanel.add(Box.createHorizontalStrut(16));
+        loginPanel.add(quotaLabel);
 
         JPanel northPanel = new JPanel(new BorderLayout());
         northPanel.add(loginPanel, BorderLayout.NORTH);
