@@ -135,40 +135,59 @@ public class AppController {
     }
 
     /**
-     * After import, fetches real video titles and channel names from the YouTube API
-     * to replace the raw video IDs. Skips post comments (non-video URLs).
+     * After import, fetches video titles/channel names and post channel names from
+     * the YouTube API to replace the raw IDs stored in the model.
      */
     private void resolveVideoNamesInBackground() {
         if (!model.isLoggedIn() || model.getComments().isEmpty()) return;
 
         Set<String> videoIds = new HashSet<>();
+        Set<String> postChannelIds = new HashSet<>();
         for (Comment c : model.getComments()) {
-            if (c.videoUrl().contains("watch?v=")) videoIds.add(c.video());
+            if (c.videoUrl().contains("watch?v=")) {
+                videoIds.add(c.video());
+            } else if (c.videoUrl().contains("/post/")) {
+                postChannelIds.add(c.channel());
+            }
         }
-        if (videoIds.isEmpty()) return;
+        if (videoIds.isEmpty() && postChannelIds.isEmpty()) return;
 
         view.setStatus("Resolving video titles and channel names...");
 
-        new SwingWorker<Map<String, VideoInfo>, Void>() {
+        // Snapshot the list so the background thread doesn't race with EDT writes
+        List<Comment> snapshot = new ArrayList<>(model.getComments());
+
+        new SwingWorker<List<Comment>, Void>() {
             @Override
-            protected Map<String, VideoInfo> doInBackground() throws Exception {
-                return model.getClient().fetchVideoInfo(videoIds);
+            protected List<Comment> doInBackground() throws Exception {
+                Map<String, VideoInfo> videoInfoMap = videoIds.isEmpty()
+                        ? Map.of() : model.getClient().fetchVideoInfo(videoIds);
+                Map<String, String> channelTitleMap = postChannelIds.isEmpty()
+                        ? Map.of() : model.getClient().fetchChannelTitles(postChannelIds);
+
+                List<Comment> resolved = new ArrayList<>();
+                for (Comment c : snapshot) {
+                    if (c.videoUrl().contains("watch?v=")) {
+                        VideoInfo info = videoInfoMap.get(c.video());
+                        resolved.add(info == null ? c : new Comment(
+                                c.id(), c.user(), info.channelTitle(), info.title(),
+                                c.text(), c.date(), c.videoUrl()));
+                    } else if (c.videoUrl().contains("/post/")) {
+                        String title = channelTitleMap.get(c.channel());
+                        resolved.add(title == null ? c : new Comment(
+                                c.id(), c.user(), title, c.video(),
+                                c.text(), c.date(), c.videoUrl()));
+                    } else {
+                        resolved.add(c);
+                    }
+                }
+                return resolved;
             }
 
             @Override
             protected void done() {
                 try {
-                    Map<String, VideoInfo> infoMap = get();
-                    List<Comment> resolved = new ArrayList<>();
-                    for (Comment c : model.getComments()) {
-                        VideoInfo info = infoMap.get(c.video());
-                        resolved.add(info == null ? c : new Comment(
-                                c.id(), c.user(),
-                                info.channelTitle(),
-                                info.title(),
-                                c.text(), c.date(), c.videoUrl()
-                        ));
-                    }
+                    List<Comment> resolved = get();
                     model.setComments(resolved);
                     view.loadComments(model.getComments());
                     view.setStatus("Loaded " + resolved.size() + " comments with titles resolved.");

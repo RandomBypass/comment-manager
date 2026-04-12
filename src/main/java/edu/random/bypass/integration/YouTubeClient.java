@@ -10,6 +10,7 @@ import com.google.api.client.http.GenericUrl;
 import com.google.api.client.http.javanet.NetHttpTransport;
 import com.google.api.client.json.gson.GsonFactory;
 import com.google.api.services.youtube.YouTube;
+import com.google.api.services.youtube.model.Channel;
 import com.google.api.services.youtube.model.ChannelListResponse;
 import com.google.api.services.youtube.model.Video;
 import com.google.api.services.youtube.model.VideoListResponse;
@@ -138,6 +139,28 @@ public class YouTubeClient {
             }
         }
         return info;
+    }
+
+    /**
+     * Fetches the display title for each channel ID, in batches of 50 (API limit).
+     * Used to resolve channel names for community-post comments.
+     */
+    public Map<String, String> fetchChannelTitles(Collection<String> channelIds) throws IOException {
+        Map<String, String> titles = new HashMap<>();
+        List<String> ids = new ArrayList<>(channelIds);
+        for (int i = 0; i < ids.size(); i += 50) {
+            List<String> batch = ids.subList(i, Math.min(i + 50, ids.size()));
+            ChannelListResponse response = youtube.channels()
+                    .list(List.of("snippet"))
+                    .setId(batch)
+                    .execute();
+            if (response.getItems() != null) {
+                for (Channel ch : response.getItems()) {
+                    titles.put(ch.getId(), ch.getSnippet().getTitle());
+                }
+            }
+        }
+        return titles;
     }
 
     public void deleteComment(String commentId) throws IOException {
