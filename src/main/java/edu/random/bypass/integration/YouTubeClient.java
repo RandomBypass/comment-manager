@@ -30,7 +30,7 @@ import java.net.HttpURLConnection;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
-import java.net.URL;
+import java.net.URISyntaxException;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -47,15 +47,15 @@ import java.util.Map;
 
 public class YouTubeClient {
 
-    private static final String APPLICATION_NAME    = "YouTube Comment Manager";
-    private static final GsonFactory JSON_FACTORY   = GsonFactory.getDefaultInstance();
+    private static final String APPLICATION_NAME = "YouTube Comment Manager";
+    private static final GsonFactory JSON_FACTORY = GsonFactory.getDefaultInstance();
     private static final String CLIENT_SECRETS_RESOURCE = "/client_secret.json";
-    private static final String KEYRING_SERVICE     = "youtube-comment-manager";
-    private static final String KEYRING_ACCOUNT     = "refresh-token";
-    private static final List<String> SCOPES        = List.of("https://www.googleapis.com/auth/youtube.force-ssl");
-    private static final String REDIRECT_URI        = "http://localhost:8888";
-    private static final String AUTH_ENDPOINT       = "https://accounts.google.com/o/oauth2/v2/auth";
-    private static final String TOKEN_ENDPOINT      = "https://oauth2.googleapis.com/token";
+    private static final String KEYRING_SERVICE = "youtube-comment-manager";
+    private static final String KEYRING_ACCOUNT = "refresh-token";
+    private static final List<String> SCOPES = List.of("https://www.googleapis.com/auth/youtube.force-ssl");
+    private static final String REDIRECT_URI = "http://localhost:8888";
+    private static final String AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
+    private static final String TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 
     private final YouTube youtube;
     private final String channelTitle;
@@ -78,9 +78,9 @@ public class YouTubeClient {
      * <p>Falls back to the full browser flow automatically if the cached token
      * has been revoked or expired.</p>
      */
-    public static YouTubeClient authenticate() throws IOException, GeneralSecurityException {
+    public static YouTubeClient authenticate() throws IOException, GeneralSecurityException, URISyntaxException {
         GoogleClientSecrets secrets = loadClientSecrets();
-        String clientId     = secrets.getInstalled().getClientId();
+        String clientId = secrets.getInstalled().getClientId();
         String clientSecret = secrets.getInstalled().getClientSecret();
 
         String refreshToken = loadRefreshToken();
@@ -94,19 +94,26 @@ public class YouTubeClient {
         return doFullPkceFlow(clientId, clientSecret);
     }
 
-    /** Returns {@code true} if a cached refresh token exists in the OS keyring (silent login possible). */
+    /**
+     * Returns {@code true} if a cached refresh token exists in the OS keyring (silent login possible).
+     */
     public static boolean hasStoredRefreshToken() {
         return loadRefreshToken() != null;
     }
 
-    /** Deletes the cached refresh token from the OS keyring (call on logout). */
+    /**
+     * Deletes the cached refresh token from the OS keyring (call on logout).
+     */
     public static void clearStoredToken() {
         try (Keyring keyring = Keyring.create()) {
             keyring.deletePassword(KEYRING_SERVICE, KEYRING_ACCOUNT);
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
     }
 
-    public String getChannelTitle() { return channelTitle; }
+    public String getChannelTitle() {
+        return channelTitle;
+    }
 
     /**
      * Fetches video title and channel name for the given video IDs,
@@ -140,10 +147,10 @@ public class YouTubeClient {
     // ── PKCE flow ─────────────────────────────────────────────────────────────
 
     private static YouTubeClient doFullPkceFlow(String clientId, String clientSecret)
-            throws IOException, GeneralSecurityException {
-        String codeVerifier  = generateCodeVerifier();
+            throws IOException, GeneralSecurityException, URISyntaxException {
+        String codeVerifier = generateCodeVerifier();
         String codeChallenge = generateCodeChallenge(codeVerifier);
-        String authCode      = authorize(clientId, codeChallenge);
+        String authCode = authorize(clientId, codeChallenge);
 
         JsonObject tokens = exchangeCode(clientId, clientSecret, authCode, codeVerifier);
         String refreshToken = tokens.get("refresh_token").getAsString();
@@ -196,11 +203,11 @@ public class YouTubeClient {
     private static String authorize(String clientId, String codeChallenge) throws IOException {
         String scope = URLEncoder.encode(String.join(" ", SCOPES), StandardCharsets.UTF_8);
         String authUrl = AUTH_ENDPOINT
-                + "?client_id="            + URLEncoder.encode(clientId,     StandardCharsets.UTF_8)
-                + "&redirect_uri="         + URLEncoder.encode(REDIRECT_URI, StandardCharsets.UTF_8)
+                + "?client_id=" + URLEncoder.encode(clientId, StandardCharsets.UTF_8)
+                + "&redirect_uri=" + URLEncoder.encode(REDIRECT_URI, StandardCharsets.UTF_8)
                 + "&response_type=code"
-                + "&scope="                + scope
-                + "&code_challenge="       + codeChallenge
+                + "&scope=" + scope
+                + "&code_challenge=" + codeChallenge
                 + "&code_challenge_method=S256"
                 + "&access_type=offline"
                 + "&prompt=consent"; // ensures a refresh_token is always returned
@@ -231,7 +238,7 @@ public class YouTubeClient {
                 if (requestLine == null) throw new IOException("Empty HTTP callback from browser.");
 
                 int queryStart = requestLine.indexOf('?');
-                int pathEnd    = requestLine.lastIndexOf(' ');
+                int pathEnd = requestLine.lastIndexOf(' ');
                 if (queryStart < 0) throw new IOException("No query string in callback: " + requestLine);
                 String query = requestLine.substring(queryStart + 1, pathEnd > queryStart ? pathEnd : requestLine.length());
 
@@ -276,18 +283,19 @@ public class YouTubeClient {
     // ── Token exchange ────────────────────────────────────────────────────────
 
     private static JsonObject exchangeCode(String clientId, String clientSecret,
-                                           String code, String codeVerifier) throws IOException {
-        String body = "client_id="     + enc(clientId)
-                + "&client_secret="    + enc(clientSecret)
-                + "&code="             + enc(code)
-                + "&code_verifier="    + enc(codeVerifier)
+                                           String code, String codeVerifier)
+            throws IOException, URISyntaxException {
+        String body = "client_id=" + enc(clientId)
+                + "&client_secret=" + enc(clientSecret)
+                + "&code=" + enc(code)
+                + "&code_verifier=" + enc(codeVerifier)
                 + "&grant_type=authorization_code"
-                + "&redirect_uri="     + enc(REDIRECT_URI);
+                + "&redirect_uri=" + enc(REDIRECT_URI);
         return postForm(body);
     }
 
-    private static JsonObject postForm(String body) throws IOException {
-        HttpURLConnection conn = (HttpURLConnection) new URL(TOKEN_ENDPOINT).openConnection();
+    private static JsonObject postForm(String body) throws IOException, URISyntaxException {
+        HttpURLConnection conn = (HttpURLConnection) new URI(TOKEN_ENDPOINT).toURL().openConnection();
         try {
             conn.setRequestMethod("POST");
             conn.setDoOutput(true);
