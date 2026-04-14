@@ -39,6 +39,8 @@ import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collection;
@@ -46,6 +48,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.prefs.Preferences;
 
 public class YouTubeClient {
 
@@ -55,6 +58,11 @@ public class YouTubeClient {
     private static final String KEYRING_SERVICE = "youtube-comment-manager";
     private static final String KEYRING_ACCOUNT = "refresh-token";
     private static final List<String> SCOPES = List.of("https://www.googleapis.com/auth/youtube.force-ssl");
+    // Google resets quota at midnight Pacific Time
+    private static final ZoneId QUOTA_RESET_ZONE = ZoneId.of("America/Los_Angeles");
+    private static final String PREF_QUOTA_DATE = "quota_date";
+    private static final String PREF_QUOTA_USED = "quota_used";
+    private static final Preferences PREFS = Preferences.userNodeForPackage(YouTubeClient.class);
     private static final String REDIRECT_URI = "http://localhost:8888";
     private static final String AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
     private static final String TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
@@ -148,7 +156,7 @@ public class YouTubeClient {
                     .list(List.of("snippet"))
                     .setId(batch)
                     .execute();
-            quotaUsed.addAndGet(QUOTA_COST_LIST);
+            addAndPersistQuota(QUOTA_COST_LIST);
             if (response.getItems() != null) {
                 for (Video v : response.getItems()) {
                     info.put(v.getId(), new VideoInfo(
@@ -174,7 +182,7 @@ public class YouTubeClient {
                     .list(List.of("snippet"))
                     .setId(batch)
                     .execute();
-            quotaUsed.addAndGet(QUOTA_COST_LIST);
+            addAndPersistQuota(QUOTA_COST_LIST);
             if (response.getItems() != null) {
                 for (Channel ch : response.getItems()) {
                     titles.put(ch.getId(), ch.getSnippet().getTitle());
@@ -186,7 +194,32 @@ public class YouTubeClient {
 
     public void deleteComment(String commentId) throws IOException {
         youtube.comments().delete(commentId).execute();
-        quotaUsed.addAndGet(QUOTA_COST_DELETE);
+        addAndPersistQuota(QUOTA_COST_DELETE);
+    }
+
+    private void addAndPersistQuota(int cost) {
+        int updated = quotaUsed.addAndGet(cost);
+        persistQuota(updated);
+    }
+
+    // ── Quota persistence ─────────────────────────────────────────────────────
+
+    /**
+     * Returns the quota already consumed today (Pacific Time), or 0 if the stored
+     * date is from a previous day (i.e. Google has already reset the quota).
+     */
+    private static int loadPersistedQuota() {
+        String today = LocalDate.now(QUOTA_RESET_ZONE).toString();
+        String storedDate = PREFS.get(PREF_QUOTA_DATE, "");
+        if (!today.equals(storedDate)) {
+            return 0;
+        }
+        return PREFS.getInt(PREF_QUOTA_USED, 0);
+    }
+
+    private static void persistQuota(int used) {
+        PREFS.put(PREF_QUOTA_DATE, LocalDate.now(QUOTA_RESET_ZONE).toString());
+        PREFS.putInt(PREF_QUOTA_USED, used);
     }
 
     // ── PKCE flow ─────────────────────────────────────────────────────────────
@@ -236,7 +269,9 @@ public class YouTubeClient {
             throw new IOException("No YouTube channel found for the authenticated account.");
         }
 
-        return new YouTubeClient(youtube, resp.getItems().get(0).getSnippet().getTitle(), QUOTA_COST_LIST);
+        int initialQuota = loadPersistedQuota() + QUOTA_COST_LIST;
+        persistQuota(initialQuota);
+        return new YouTubeClient(youtube, resp.getItems().get(0).getSnippet().getTitle(), initialQuota);
     }
 
     // ── Browser redirect / local server ───────────────────────────────────────
